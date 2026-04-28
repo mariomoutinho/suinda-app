@@ -1291,6 +1291,15 @@ SQL);
                 continue;
             }
 
+            if ($this->isZstdFile($path)) {
+                $target = $path . '.decoded';
+                if (!$this->decompressZstdFile($path, $target)) {
+                    continue;
+                }
+
+                $path = $target;
+            }
+
             $mime = mime_content_type($path) ?: $this->guessMediaMime($fileName, $type);
             return 'data:' . $mime . ';base64,' . base64_encode((string) file_get_contents($path));
         }

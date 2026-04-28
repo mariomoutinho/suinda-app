@@ -12,14 +12,13 @@ async function renderDecks() {
 
   const user = getCurrentUser();
 
-  await Promise.all(decks.map(deck => loadCardsFromApi(deck.id, { includeMedia: false })));
-
   const deckRows = decks.map(deck => {
-    const counts = user && typeof getStudyCountsForDeck === "function"
+    const hasLoadedCards = mockCards.some(card => Number(card.deckId) === Number(deck.id));
+    const counts = user && hasLoadedCards && typeof getStudyCountsForDeck === "function"
       ? getStudyCountsForDeck(user.id, deck.id, new Date())
-      : { new: deck.totalCards || 0, learning: 0, review: 0 };
+      : getFastDeckCounts(deck);
 
-    const directCounts = user && typeof getDirectStudyCountsForDeck === "function"
+    const directCounts = user && hasLoadedCards && typeof getDirectStudyCountsForDeck === "function"
       ? getDirectStudyCountsForDeck(user.id, deck.id, new Date())
       : counts;
 
@@ -51,6 +50,19 @@ async function renderDecks() {
     .join("");
 
   setupDeckGroupActions();
+}
+
+function getFastDeckCounts(deck) {
+  const totalCards = Number(deck?.totalCards || 0);
+  const dailyLimit = typeof getDailyNewCardsLimit === "function"
+    ? getDailyNewCardsLimit(deck?.id)
+    : totalCards;
+
+  return {
+    new: Math.min(totalCards, Math.max(0, dailyLimit)),
+    learning: 0,
+    review: 0
+  };
 }
 
 function buildDeckTree(decks) {

@@ -69,7 +69,7 @@ async function startStudyPage() {
   const scopeDeckIds = typeof getDeckScopeDeckIds === "function"
     ? getDeckScopeDeckIds(deckId)
     : [deckId];
-  await Promise.all(scopeDeckIds.map(scopedDeckId => loadCardsFromApi(scopedDeckId)));
+  await Promise.all(scopeDeckIds.map(scopedDeckId => loadCardsFromApi(scopedDeckId, { includeMedia: false })));
   await loadCardProgressFromApi();
 
   const deck = decks.find(item => Number(item.id) === Number(deckId)) ||
@@ -484,7 +484,35 @@ async function startStudyPage() {
     window.location.href = "result.html";
   }
 
-  function loadNextCard() {
+  async function loadFullCurrentCard() {
+    if (!state.currentCard?.id || typeof apiGetCard !== "function") {
+      return;
+    }
+
+    const hasPlayableAudio = typeof state.currentCard.audioData === "string" &&
+      state.currentCard.audioData.startsWith("data:audio/");
+
+    if (hasPlayableAudio || (state.currentCard.imageData && !state.currentCard.audioData)) {
+      return;
+    }
+
+    try {
+      const fullCard = await apiGetCard(state.currentCard.id);
+      if (fullCard) {
+        const index = mockCards.findIndex(card => Number(card.id) === Number(fullCard.id));
+        if (index >= 0) {
+          mockCards[index] = { ...mockCards[index], ...fullCard };
+          state.currentCard = mockCards[index];
+        } else {
+          state.currentCard = { ...state.currentCard, ...fullCard };
+        }
+      }
+    } catch (error) {
+      console.warn("Nao foi possivel carregar midias do cartao atual.", error);
+    }
+  }
+
+  async function loadNextCard() {
     state.currentCard = getNextAvailableCard();
 
     if (!state.currentCard) {
@@ -492,6 +520,7 @@ async function startStudyPage() {
       return;
     }
 
+    await loadFullCurrentCard();
     renderCurrentCard();
   }
 
