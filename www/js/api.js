@@ -2,6 +2,7 @@ const SUINDA_API_BASE_URL =
   localStorage.getItem("suinda_api_base_url") || "http://127.0.0.1:8000";
 
 let suindaLastDataSource = "local";
+let suindaApiSessionRecovery = null;
 
 function getApiToken() {
   return localStorage.getItem("suinda_api_token");
@@ -20,13 +21,50 @@ function setDataSource(source) {
   localStorage.setItem("suinda_last_data_source", source);
 }
 
+async function recoverApiSession() {
+  if (suindaApiSessionRecovery) {
+    return suindaApiSessionRecovery;
+  }
+
+  suindaApiSessionRecovery = (async () => {
+    const currentUser = getFromStorage("suinda_current_user");
+    const demoUser = mockUsers.find(user => (
+      user.active && currentUser && user.email === currentUser.email
+    ));
+
+    if (!demoUser) {
+      return false;
+    }
+
+    try {
+      const apiUser = await apiLogin(demoUser.email, demoUser.password);
+      saveToStorage("suinda_current_user", apiUser);
+      return true;
+    } catch (error) {
+      clearApiToken();
+      return false;
+    }
+  })();
+
+  const recovered = await suindaApiSessionRecovery;
+  suindaApiSessionRecovery = null;
+  return recovered;
+}
+
 async function apiRequest(path, options = {}) {
+  const {
+    auth = true,
+    headers: optionHeaders = {},
+    _retriedAuth = false,
+    ...fetchOptions
+  } = options;
+
   const headers = {
     "Content-Type": "application/json",
-    ...(options.headers || {})
+    ...optionHeaders
   };
 
-  if (options.auth !== false) {
+  if (auth !== false) {
     const token = getApiToken();
     if (token) {
       headers.Authorization = `Bearer ${token}`;
@@ -34,7 +72,7 @@ async function apiRequest(path, options = {}) {
   }
 
   const response = await fetch(`${SUINDA_API_BASE_URL}${path}`, {
-    ...options,
+    ...fetchOptions,
     headers
   });
 
@@ -47,7 +85,22 @@ async function apiRequest(path, options = {}) {
   const data = JSON.parse(jsonText || "{}");
 
   if (!response.ok) {
-    throw new Error(data.error || "Erro ao comunicar com a API.");
+    if (response.status === 401 && auth !== false && !_retriedAuth) {
+      clearApiToken();
+
+      if (await recoverApiSession()) {
+        return apiRequest(path, {
+          ...fetchOptions,
+          headers: optionHeaders,
+          auth,
+          _retriedAuth: true
+        });
+      }
+    }
+
+    const error = new Error(data.error || "Erro ao comunicar com a API.");
+    error.status = response.status;
+    throw error;
   }
 
   return data;

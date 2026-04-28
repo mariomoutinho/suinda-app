@@ -790,54 +790,57 @@ SQL);
         $notes = $source->query('SELECT id, mid, flds FROM notes ORDER BY id')->fetchAll();
         $models = $this->readAnkiModels($source);
         $mediaMap = $this->readAnkiMediaMap($tmpDir);
+        $mediaIndex = $this->buildAnkiMediaIndex($tmpDir, $mediaMap);
         $created = 0;
         $stmt = $this->db->prepare(
             'INSERT INTO cards (deck_id, question, answer, question_html, answer_html, card_type, image_data, audio_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
         );
-        $findExisting = $this->db->prepare(
-            'SELECT id FROM cards
-             WHERE deck_id = ?
-               AND active = 1
-               AND (
-                    question = ?
-                    OR REPLACE(question, ?, "") = ?
-                    OR REPLACE(question, ?, "") = ?
-               )
-             LIMIT 1'
-        );
         $updateExisting = $this->db->prepare(
             'UPDATE cards SET question = ?, answer = ?, question_html = ?, answer_html = ?, card_type = ?, image_data = ?, audio_data = ? WHERE id = ?'
         );
+        $existingCards = $this->db->prepare('SELECT id, question FROM cards WHERE deck_id = ? AND active = 1');
+        $existingCards->execute([$deckId]);
+        $existingByQuestion = [];
 
-        foreach ($notes as $note) {
-            $fields = explode("\x1f", (string) $note['flds']);
-            $rendered = $this->renderAnkiNote($note, $fields, $models);
-            $frontHtml = $rendered['front'] ?: (string) ($fields[0] ?? '');
-            $backHtml = $rendered['back'] ?: (string) ($fields[1] ?? '');
-            $question = $this->ankiHtmlToText($frontHtml);
-            $answer = $this->ankiHtmlToText($backHtml);
-            $questionHtml = $this->sanitizeAnkiHtml($frontHtml);
-            $answerHtml = $this->sanitizeAnkiHtml($backHtml);
-            $imageData = $this->extractAnkiMediaData($frontHtml . $backHtml, $tmpDir, $mediaMap, 'image');
-            $audioData = $this->extractAnkiMediaData($frontHtml . $backHtml, $tmpDir, $mediaMap, 'audio');
+        foreach ($existingCards->fetchAll() as $existingCard) {
+            $existingByQuestion[(string) $existingCard['question']] = (int) $existingCard['id'];
+        }
 
-            if ($question === '' || $answer === '') {
-                continue;
+        $this->db->beginTransaction();
+
+        try {
+            foreach ($notes as $note) {
+                $fields = explode("\x1f", (string) $note['flds']);
+                $rendered = $this->renderAnkiNote($note, $fields, $models);
+                $frontHtml = $rendered['front'] ?: (string) ($fields[0] ?? '');
+                $backHtml = $rendered['back'] ?: (string) ($fields[1] ?? '');
+                $question = $this->ankiHtmlToText($frontHtml);
+                $answer = $this->ankiHtmlToText($backHtml);
+                $questionHtml = $this->sanitizeAnkiHtml($frontHtml);
+                $answerHtml = $this->sanitizeAnkiHtml($backHtml);
+                $imageData = $this->extractAnkiMediaData($frontHtml . $backHtml, $mediaIndex, 'image');
+                $audioData = $this->extractAnkiMediaData($frontHtml . $backHtml, $mediaIndex, 'audio');
+
+                if ($question === '' || $answer === '') {
+                    continue;
+                }
+
+                $existingId = $existingByQuestion[$question] ?? null;
+
+                if ($existingId) {
+                    $updateExisting->execute([$question, $answer, $questionHtml, $answerHtml, 'basic', $imageData, $audioData, $existingId]);
+                } else {
+                    $stmt->execute([$deckId, $question, $answer, $questionHtml, $answerHtml, 'basic', $imageData, $audioData]);
+                    $existingByQuestion[$question] = (int) $this->db->lastInsertId();
+                }
+
+                $created++;
             }
 
-            $soundMarkers = $this->extractAnkiSoundMarkers($frontHtml . $backHtml);
-            $firstSoundMarker = $soundMarkers[0] ?? '';
-
-            $findExisting->execute([$deckId, $question, $firstSoundMarker, $question, trim($firstSoundMarker), $question]);
-            $existingId = $findExisting->fetchColumn();
-
-            if ($existingId) {
-                $updateExisting->execute([$question, $answer, $questionHtml, $answerHtml, 'basic', $imageData, $audioData, (int) $existingId]);
-            } else {
-                $stmt->execute([$deckId, $question, $answer, $questionHtml, $answerHtml, 'basic', $imageData, $audioData]);
-            }
-
-            $created++;
+            $this->db->commit();
+        } catch (Throwable $exception) {
+            $this->db->rollBack();
+            throw $exception;
         }
 
         $this->json(['imported' => $created, 'deck' => $this->findDeckSummary($deckId)], 201);
@@ -1216,7 +1219,39 @@ SQL);
         return $map;
     }
 
-    private function extractAnkiMediaData(string $html, string $tmpDir, array $mediaMap, string $type): ?string
+    private function buildAnkiMediaIndex(string $tmpDir, array $mediaMap): array
+    {
+        $index = [];
+
+        foreach ($mediaMap as $archive => $mappedName) {
+            $path = $tmpDir . '/' . $archive;
+            if (!is_file($path)) {
+                continue;
+            }
+
+            $normalized = $this->normalizeAnkiMediaName((string) $mappedName);
+            if ($normalized !== '') {
+                $index[$normalized] = $path;
+                $index[strtolower($normalized)] = $path;
+            }
+        }
+
+        foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($tmpDir, FilesystemIterator::SKIP_DOTS)) as $candidate) {
+            if (!$candidate->isFile()) {
+                continue;
+            }
+
+            $normalized = $this->normalizeAnkiMediaName($candidate->getBasename());
+            if ($normalized !== '') {
+                $index[$normalized] ??= $candidate->getPathname();
+                $index[strtolower($normalized)] ??= $candidate->getPathname();
+            }
+        }
+
+        return $index;
+    }
+
+    private function extractAnkiMediaData(string $html, array $mediaIndex, string $type): ?string
     {
         $fileNames = [];
 
@@ -1239,9 +1274,10 @@ SQL);
         }
 
         foreach ($fileNames as $fileName) {
-            $path = $this->resolveAnkiMediaFilePath($tmpDir, $mediaMap, $fileName);
+            $normalized = $this->normalizeAnkiMediaName($fileName);
+            $path = $mediaIndex[$normalized] ?? $mediaIndex[strtolower($normalized)] ?? null;
 
-            if (!is_file($path)) {
+            if (!$path || !is_file($path)) {
                 continue;
             }
 
@@ -1250,43 +1286,6 @@ SQL);
         }
 
         return null;
-    }
-
-    private function resolveAnkiMediaFilePath(string $tmpDir, array $mediaMap, string $fileName): string
-    {
-        $fileName = $this->normalizeAnkiMediaName($fileName);
-        $archiveName = array_search($fileName, $mediaMap, true);
-
-        if ($archiveName !== false) {
-            return $tmpDir . '/' . $archiveName;
-        }
-
-        foreach ($mediaMap as $archive => $mappedName) {
-            if ($this->normalizeAnkiMediaName((string) $mappedName) === $fileName) {
-                return $tmpDir . '/' . $archive;
-            }
-
-            if (strtolower($this->normalizeAnkiMediaName((string) $mappedName)) === strtolower($fileName)) {
-                return $tmpDir . '/' . $archive;
-            }
-        }
-
-        $directPath = $tmpDir . '/' . $fileName;
-        if (is_file($directPath)) {
-            return $directPath;
-        }
-
-        foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($tmpDir, FilesystemIterator::SKIP_DOTS)) as $candidate) {
-            if (!$candidate->isFile()) {
-                continue;
-            }
-
-            if (strtolower($candidate->getBasename()) === strtolower($fileName)) {
-                return $candidate->getPathname();
-            }
-        }
-
-        return $directPath;
     }
 
     private function normalizeAnkiMediaName(string $fileName): string

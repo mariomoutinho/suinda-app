@@ -101,7 +101,8 @@ function getCardProgress(userId, cardId) {
   return all.find(item => item.userId === userId && item.cardId === cardId) || null;
 }
 
-function upsertCardProgress(progress) {
+function upsertCardProgress(progress, options = {}) {
+  const shouldSync = options.sync !== false;
   const all = getAllCardProgress();
   const index = all.findIndex(
     item => item.userId === progress.userId && item.cardId === progress.cardId
@@ -115,7 +116,7 @@ function upsertCardProgress(progress) {
 
   saveAllCardProgress(all);
 
-  if (typeof apiSaveCardProgress === "function") {
+  if (shouldSync && typeof apiSaveCardProgress === "function") {
     apiSaveCardProgress(progress).catch(error => {
       console.warn("Nao foi possivel salvar o progresso na API.", error);
     });
@@ -127,7 +128,7 @@ function getOrCreateCardProgress(userId, cardId) {
   if (existing) return existing;
 
   const fresh = getDefaultCardProgress(userId, cardId);
-  upsertCardProgress(fresh);
+  upsertCardProgress(fresh, { sync: false });
   return fresh;
 }
 

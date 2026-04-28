@@ -7,7 +7,7 @@ async function renderDecks() {
   const decks = await loadDecksFromApi();
 
   const sourceWarning = localStorage.getItem("suinda_last_data_source") === "local"
-    ? `<p class="message error-line">Mostrando dados locais. Verifique se o backend MySQL esta rodando.</p>`
+    ? `<p class="message error-line">Mostrando dados locais. Verifique se o backend MySQL esta rodando e faca login novamente.</p>`
     : "";
 
   const user = getCurrentUser();
