@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Navegador de cartoes - Suinda</title>
+  <link rel="stylesheet" href="../css/variables.css" />
+  <link rel="stylesheet" href="../css/global.css" />
+  <link rel="stylesheet" href="../css/components.css" />
+</head>
+<body data-shell="true">
+  <main class="screen app-screen browser-screen">
+    <header class="app-topbar">
+      <button class="icon-button" data-drawer-open type="button" aria-label="Abrir menu">☰</button>
+      <div class="app-title-block">
+        <h1 class="app-title">Navegador</h1>
+        <p id="browserCount" class="app-subtitle">Cartoes visiveis</p>
+      </div>
+      <div class="app-actions">
+        <a class="icon-button" href="add.html" aria-label="Adicionar">+</a>
+        <button class="icon-button" id="browserSearchBtn" type="button" aria-label="Pesquisar">⌕</button>
+        <button class="icon-button" data-menu-toggle="browserMenu" type="button" aria-label="Acoes">⋮</button>
+      </div>
+      <div id="browserMenu" class="app-menu">
+        <button type="button">Selecionar cartoes</button>
+        <button type="button">Editar etiquetas</button>
+        <button type="button">Suspender</button>
+        <button type="button">Reagendar</button>
+        <button data-logout type="button">Sair</button>
+      </div>
+    </header>
+
+    <section class="browser-toolbar">
+      <input id="browserSearch" type="search" placeholder="Pesquisar cartoes/notas" />
+      <select id="browserDeckFilter" aria-label="Filtrar por baralho">
+        <option value="">Todos os baralhos</option>
+      </select>
+    </section>
+
+    <section class="card-browser-table" aria-label="Navegador de cartoes">
+      <div class="browser-table-head">
+        <span>Pergunta</span>
+        <span>Tipo</span>
+        <span>Situação</span>
+        <span>Baralho</span>
+      </div>
+      <div id="browserRows" class="browser-table-body"></div>
+    </section>
+
+    <dialog id="browserCardDialog" class="app-dialog card-editor-dialog">
+      <form method="dialog" class="card-editor-form">
+        <header class="dialog-topbar">
+          <button id="browserCardCancelBtn" class="icon-button" value="cancel" type="button" aria-label="Voltar">&lt;</button>
+          <div>
+            <h2>Editar nota</h2>
+            <p id="browserCardDeckHint" class="muted-line">Cartao selecionado</p>
+          </div>
+          <div class="app-actions">
+            <button id="browserCardSaveBtn" class="icon-button" type="button" aria-label="Salvar">✓</button>
+            <button id="browserCardPreviewOpenBtn" class="icon-button" type="button" aria-label="Visualizar">◉</button>
+            <button class="icon-button" data-menu-toggle="browserCardMenu" type="button" aria-label="Acoes">⋮</button>
+          </div>
+          <div id="browserCardMenu" class="app-menu">
+            <button id="browserCardMenuPreviewBtn" type="button">Visualizar</button>
+            <button id="browserCardDeleteBtn" type="button">Excluir nota</button>
+            <button id="browserCardCloseMenuBtn" type="button">Sair</button>
+          </div>
+        </header>
+
+        <label class="editor-row">
+          <strong>Tipo:</strong>
+          <select id="browserCardType">
+            <option value="basic">Basic</option>
+            <option value="occlusion">Oclusao de imagem</option>
+          </select>
+        </label>
+
+        <label class="editor-row">
+          <strong>Baralho:</strong>
+          <select id="browserCardDeck"></select>
+        </label>
+
+        <label class="editor-field">
+          <span>Frente</span>
+          <textarea id="browserCardQuestion" rows="5"></textarea>
+        </label>
+
+        <label class="editor-field">
+          <span>Verso</span>
+          <textarea id="browserCardAnswer" rows="5"></textarea>
+        </label>
+      </form>
+    </dialog>
+
+    <dialog id="browserPreviewDialog" class="app-dialog card-preview-dialog">
+      <section class="card-preview-shell">
+        <header class="dialog-topbar">
+          <button id="browserPreviewCloseBtn" class="icon-button" type="button" aria-label="Voltar">&lt;</button>
+          <div>
+            <h2>Visualizar</h2>
+            <p id="browserPreviewDeckHint" class="muted-line">Previa de estudo</p>
+          </div>
+          <button id="browserPreviewAudioBtn" class="icon-button hidden" type="button" aria-label="Ouvir pergunta">♪</button>
+        </header>
+
+        <div class="card-preview-stage">
+          <section class="card-preview-block">
+            <p class="field-label">Pergunta</p>
+            <div id="browserPreviewQuestion" class="study-text-main"></div>
+            <div id="browserPreviewMedia" class="study-media"></div>
+          </section>
+
+          <section id="browserPreviewAnswerBlock" class="card-preview-block answer-box hidden">
+            <p class="field-label">Resposta</p>
+            <div id="browserPreviewAnswer" class="study-text-main"></div>
+          </section>
+        </div>
+
+        <footer class="card-preview-footer">
+          <button id="browserPreviewShowAnswerBtn" class="btn btn-primary study-main-btn" type="button">Mostrar resposta</button>
+          <div id="browserPreviewAnswerActions" class="answer-actions-grid hidden" aria-label="Botoes de avaliacao">
+            <button class="btn btn-danger answer-btn" type="button" disabled>
+              <span class="answer-btn-label">Errei</span>
+              <span class="answer-btn-time">1m</span>
+            </button>
+            <button class="btn btn-warning answer-btn" type="button" disabled>
+              <span class="answer-btn-label">Dificil</span>
+              <span class="answer-btn-time">6m</span>
+            </button>
+            <button class="btn btn-success answer-btn" type="button" disabled>
+              <span class="answer-btn-label">Facil</span>
+              <span class="answer-btn-time">10m</span>
+            </button>
+            <button class="btn btn-primary answer-btn" type="button" disabled>
+              <span class="answer-btn-label">Muito facil</span>
+              <span class="answer-btn-time">4d</span>
+            </button>
+          </div>
+        </footer>
+      </section>
+    </dialog>
+  </main>
+
+  <script src="../js/storage.js"></script>
+  <script src="../js/mock.js"></script>
+  <script src="../js/api.js"></script>
+  <script src="../js/auth.js"></script>
+  <script src="../js/suinda-shell.js"></script>
+  <script src="../js/progress.js"></script>
+  <script src="../js/scheduler.js"></script>
+  <script src="../js/card-progress.js"></script>
+  <script src="../js/anki.js"></script>
+  <script src="../js/card-browser-page.js"></script>
+</body>
+</html>

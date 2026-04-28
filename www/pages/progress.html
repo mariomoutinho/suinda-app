@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Progresso - Suinda</title>
+  <link rel="stylesheet" href="../css/variables.css" />
+  <link rel="stylesheet" href="../css/global.css" />
+  <link rel="stylesheet" href="../css/components.css" />
+</head>
+<body data-shell="true">
+  <main class="screen app-screen stats-screen">
+    <header class="app-topbar sticky-toolbar">
+      <button class="icon-button" data-drawer-open type="button" aria-label="Abrir menu">☰</button>
+      <div class="app-title-block">
+        <h1 class="app-title">Progresso</h1>
+        <p class="app-subtitle">Estatisticas de estudo</p>
+      </div>
+      <button class="icon-button" data-menu-toggle="statsMenu" type="button" aria-label="Acoes">⋮</button>
+      <div id="statsMenu" class="app-menu">
+        <a href="decks.html">Baralhos</a>
+        <a href="card-browser.html">Navegador</a>
+        <button data-logout type="button">Sair</button>
+      </div>
+    </header>
+
+    <section class="stats-filter-bar">
+      <label><input type="radio" name="scope" checked /> baralho</label>
+      <label><input type="radio" name="scope" /> colecao</label>
+      <input value="deck:current" aria-label="Filtro" />
+      <label><input type="radio" name="period" checked /> 1 mes</label>
+      <label><input type="radio" name="period" /> 1 ano</label>
+      <label><input type="radio" name="period" /> historico</label>
+    </section>
+
+    <section class="stat-card">
+      <h2>Hoje</h2>
+      <p id="ankiTodayLine" class="daily-line compact">Carregando estudo de hoje...</p>
+    </section>
+
+    <section class="stat-card chart-card">
+      <h2>Previsao</h2>
+      <p>O numero de revisoes agendadas para o futuro.</p>
+      <canvas id="dailyStatsChart" class="stats-chart" width="640" height="260"></canvas>
+      <div class="chart-legend">
+        <span><span class="legend-dot legend-cards"></span>Cartoes</span>
+        <span><span class="legend-dot legend-time"></span>Minutos</span>
+      </div>
+    </section>
+
+    <section class="stat-card">
+      <h2>Revisoes</h2>
+      <div class="placeholder-chart bars"></div>
+      <p class="stat-summary">Total: revisoes registradas no periodo.</p>
+    </section>
+
+    <section class="stat-card">
+      <h2>Contagem de Cartoes</h2>
+      <div class="card-count-grid">
+        <span>Novos</span><strong id="statNewCards">0</strong>
+        <span>Aprendendo</span><strong>0</strong>
+        <span>Revisao</span><strong id="statReviewCards">0</strong>
+        <span>Total de cartoes</span><strong id="statTotalCards">0</strong>
+      </div>
+    </section>
+
+    <section class="stat-card">
+      <h2>Intervalos</h2>
+      <p>Intervalos entre as revisoes.</p>
+      <div class="placeholder-chart intervals"></div>
+    </section>
+
+    <section class="stat-card">
+      <h2>Facilidade do Cartao</h2>
+      <p>Quanto menor a facilidade, mais frequentemente o cartao aparecera.</p>
+      <div class="placeholder-chart ease"></div>
+    </section>
+
+    <section class="stat-card">
+      <h2>Retencao Verdadeira</h2>
+      <table class="mini-stats-table">
+        <tr><th></th><th>Recentes</th><th>Maduros</th><th>Total</th></tr>
+        <tr><td>Hoje</td><td>N/A</td><td>N/A</td><td>N/A</td></tr>
+        <tr><td>Semana</td><td>80%</td><td>100%</td><td>83%</td></tr>
+      </table>
+    </section>
+
+    <section class="stat-card">
+      <h2>Distribuicao por hora</h2>
+      <p>Taxa de sucesso por horario do dia.</p>
+      <div class="placeholder-chart hourly"></div>
+    </section>
+
+    <section class="stat-card">
+      <h2>Botoes de resposta</h2>
+      <p>O numero de vezes que voce escolheu cada botao.</p>
+      <div class="answer-bar-summary">
+        <span class="btn-danger"></span>
+        <span class="btn-warning"></span>
+        <span class="btn-success"></span>
+        <span class="btn-primary"></span>
+      </div>
+    </section>
+
+    <section class="stat-card">
+      <h2>Adicionado</h2>
+      <p>Novos cartoes adicionados por dia.</p>
+      <div class="placeholder-chart added"></div>
+    </section>
+  </main>
+
+  <script src="../js/storage.js"></script>
+  <script src="../js/mock.js"></script>
+  <script src="../js/api.js"></script>
+  <script src="../js/auth.js"></script>
+  <script src="../js/suinda-shell.js"></script>
+  <script src="../js/progress.js"></script>
+  <script src="../js/anki.js"></script>
+  <script src="../js/progress-page.js"></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", () => renderAnkiTodayLine("ankiTodayLine"));
+  </script>
+</body>
+</html>

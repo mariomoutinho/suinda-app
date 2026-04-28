@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Opcoes de baralho - Suinda</title>
+  <link rel="stylesheet" href="../css/variables.css" />
+  <link rel="stylesheet" href="../css/global.css" />
+  <link rel="stylesheet" href="../css/components.css" />
+</head>
+<body data-shell="true">
+  <main class="screen app-screen settings-screen">
+    <header class="app-topbar sticky-toolbar">
+      <a class="icon-button" href="decks.html" aria-label="Voltar">‹</a>
+      <div class="app-title-block">
+        <h1 class="app-title">Opcoes de baralho</h1>
+        <p class="app-subtitle">Preset de estudo</p>
+      </div>
+      <button id="saveDeckOptionsBtn" class="btn btn-primary btn-compact" type="button">Salvar</button>
+    </header>
+
+    <section class="settings-preset-row">
+      <select id="deckOptionsPreset" aria-label="Preset de opcoes">
+        <option>Default</option>
+        <option>Medicina</option>
+        <option>Idiomas</option>
+      </select>
+      <button class="icon-button" data-menu-toggle="optionsMenu" type="button" aria-label="Acoes">⋮</button>
+      <div id="optionsMenu" class="app-menu">
+        <button id="createPresetBtn" type="button">Criar novo preset</button>
+        <button id="renamePresetBtn" type="button">Renomear preset</button>
+        <button id="restorePresetBtn" type="button">Restaurar padrao</button>
+        <button data-logout type="button">Sair</button>
+      </div>
+    </section>
+
+    <section class="settings-section">
+      <div class="settings-section-head">
+        <h2>Limites diarios</h2>
+        <button class="help-dot" type="button">?</button>
+      </div>
+      <label>Novos cartoes/dia <input data-option="dailyNewCardsLimit" type="number" value="20" min="0" /></label>
+      <label>Revisoes maximas/dia <input data-option="dailyReviewCardsLimit" type="number" value="200" min="0" /></label>
+      <label class="toggle-row">Novos ignoram limite de revisao <input data-option="newCardsIgnoreReviewLimit" type="checkbox" /></label>
+      <label class="toggle-row">Limites comecam do deck superior <input data-option="limitsStartFromParentDeck" type="checkbox" /></label>
+    </section>
+
+    <section class="settings-section">
+      <div class="settings-section-head">
+        <h2>Novos cartoes</h2>
+        <button class="help-dot" type="button">?</button>
+      </div>
+      <label>Etapas de aprendizagem <input data-option="learningSteps" value="1m 10m" /></label>
+      <label>Intervalo de graduacao <input data-option="graduatingIntervalDays" type="number" value="1" min="1" /></label>
+      <label>Intervalo facil <input data-option="easyIntervalDays" type="number" value="3" min="1" /></label>
+      <label>Ordem de insercao
+        <select data-option="insertionOrder">
+          <option value="oldest">Sequencial (mais antigos primeiro)</option>
+          <option value="random">Aleatorio</option>
+        </select>
+      </label>
+    </section>
+
+    <section class="settings-section">
+      <div class="settings-section-head">
+        <h2>Falhas</h2>
+        <button class="help-dot" type="button">?</button>
+      </div>
+      <label>Etapas de reaprendizagem <input value="6m" /></label>
+      <label>Intervalo minimo <input type="number" value="1" /></label>
+      <label>Limite de falhas <input type="number" value="100" /></label>
+      <label>Acao ao falhar
+        <select>
+          <option>Somente etiquetas</option>
+          <option>Suspender cartao</option>
+        </select>
+      </label>
+    </section>
+
+    <section class="settings-section">
+      <div class="settings-section-head">
+        <h2>Ordem de exibicao</h2>
+        <button class="help-dot" type="button">?</button>
+      </div>
+      <label>Agrupamento de novos <select><option>Baralho</option><option>Todos juntos</option></select></label>
+      <label>Classificacao de novos <select><option>Modelo do cartao</option><option>Data de criacao</option></select></label>
+      <label>Novos vs revisao <select><option>Mostrar depois de revisoes</option><option>Misturar</option></select></label>
+    </section>
+
+    <section class="settings-section">
+      <div class="settings-section-head">
+        <h2>Audio</h2>
+        <button class="help-dot" type="button">?</button>
+      </div>
+      <label class="toggle-row">Nao reproduzir audio automaticamente <input type="checkbox" /></label>
+      <label class="toggle-row">Pular pergunta ao repetir resposta <input type="checkbox" /></label>
+    </section>
+
+    <section class="settings-section">
+      <div class="settings-section-head">
+        <h2>Cronometro</h2>
+        <button class="help-dot" type="button">?</button>
+      </div>
+      <label>Maximo de segundos para resposta <input type="number" value="200" /></label>
+      <label class="toggle-row">Mostrar cronometro de resposta <input type="checkbox" /></label>
+      <label class="toggle-row">Parar temporizador ao responder <input type="checkbox" /></label>
+    </section>
+
+    <section class="settings-section">
+      <div class="settings-section-head">
+        <h2>Avanco automatico</h2>
+        <button class="help-dot" type="button">?</button>
+      </div>
+      <label>Segundos para mostrar pergunta <input value="0,0" /></label>
+      <label>Segundos para mostrar resposta <input value="0,0" /></label>
+      <label class="toggle-row">Esperando pelo audio <input type="checkbox" /></label>
+      <label>Acao da questao <select><option>Mostrar resposta</option></select></label>
+      <label>Acao de resposta <select><option>Ocultar cartao</option></select></label>
+    </section>
+
+    <section class="settings-section">
+      <div class="settings-section-head">
+        <h2>Dias de descanso</h2>
+        <button class="help-dot" type="button">?</button>
+      </div>
+      <div class="rest-days">
+        <label>Segunda <input type="range" min="0" max="2" value="2" /></label>
+        <label>Terca <input type="range" min="0" max="2" value="2" /></label>
+        <label>Quarta <input type="range" min="0" max="2" value="1" /></label>
+        <label>Quinta <input type="range" min="0" max="2" value="2" /></label>
+        <label>Sexta <input type="range" min="0" max="2" value="2" /></label>
+        <label>Sabado <input type="range" min="0" max="2" value="1" /></label>
+        <label>Domingo <input type="range" min="0" max="2" value="1" /></label>
+      </div>
+      <p class="settings-warning">As revisoes existentes nao serao reprogramadas sem reagendamento.</p>
+    </section>
+
+    <section class="settings-section">
+      <div class="settings-section-head">
+        <h2>Avancado</h2>
+        <button class="help-dot" type="button">?</button>
+      </div>
+      <label>Intervalo maximo <input type="number" value="36500" /></label>
+      <label>Facilidade inicial <input value="2,30" /></label>
+      <label>Bonus por ser facil <input value="1,50" /></label>
+      <label>Modificador de intervalo <input value="1,00" /></label>
+    </section>
+  </main>
+
+  <script src="../js/storage.js"></script>
+  <script src="../js/auth.js"></script>
+  <script src="../js/suinda-shell.js"></script>
+  <script src="../js/scheduler.js"></script>
+  <script src="../js/card-progress.js"></script>
+  <script src="../js/anki.js"></script>
+  <script src="../js/deck-options.js"></script>
+</body>
+</html>

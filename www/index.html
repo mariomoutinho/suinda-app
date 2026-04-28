@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Suindá</title>
+  <link rel="stylesheet" href="css/variables.css" />
+  <link rel="stylesheet" href="css/global.css" />
+  <link rel="stylesheet" href="css/components.css" />
+</head>
+<body>
+  <div class="screen center-screen">
+    <div class="logo-box">
+      <div class="owl-icon">🦉</div>
+      <h1>Suindá</h1>
+      <p>Seu app de estudos por cards</p>
+    </div>
+  </div>
+
+  <script src="js/storage.js"></script>
+  <script src="js/mock.js"></script>
+  <script src="js/auth.js"></script>
+  <script>
+    const loggedUser = getCurrentUser();
+    if (loggedUser) {
+      window.location.href = "pages/home.html";
+    } else {
+      window.location.href = "pages/login.html";
+    }
+  </script>
+</body>
+</html>

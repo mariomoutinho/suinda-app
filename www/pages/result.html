@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Resultado - Suindá</title>
+  <link rel="stylesheet" href="../css/variables.css" />
+  <link rel="stylesheet" href="../css/global.css" />
+  <link rel="stylesheet" href="../css/components.css" />
+</head>
+<body>
+  <main class="screen result-screen">
+  <div id="confettiContainer" class="confetti-container" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div>
+    <p class="eyebrow">Sessão concluída</p>
+    <h1>Bom estudo!</h1>
+    <p>Veja abaixo o resumo do seu desempenho nesta sessão.</p>
+    </div>
+    <button class="logout-link" data-logout type="button">Sair</button>
+  </header>
+
+    <section class="card result-hero-card">
+      <div class="result-hero-icon">🎉</div>
+      <h2 id="resultDeckName">Baralho</h2>
+      <p id="resultSummary">Resumo</p>
+    </section>
+
+    <section class="card">
+      <div class="section-head">
+        <h2>Resumo da sessão</h2>
+      </div>
+      <div id="resultStats" class="progress-grid"></div>
+    </section>
+
+    <section class="card">
+      <div class="section-head">
+        <h2>Próximos passos</h2>
+      </div>
+
+      <div class="result-actions">
+        <a id="studyAgainBtn" class="btn btn-primary result-btn" href="decks.html">Estudar novamente</a>
+        <a class="btn btn-secondary result-btn" href="decks.html">Voltar aos baralhos</a>
+      </div>
+    </section>
+  </main>
+
+  <script src="../js/storage.js"></script>
+  <script src="../js/mock.js"></script>
+  <script src="../js/api.js"></script>
+  <script src="../js/auth.js"></script>
+  <script src="../js/progress.js"></script>
+  <script src="../js/anki.js"></script>
+  <script src="../js/study.js"></script>
+</body>
+</html>

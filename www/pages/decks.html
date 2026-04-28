@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Baralhos - Suinda</title>
+  <link rel="stylesheet" href="../css/variables.css" />
+  <link rel="stylesheet" href="../css/global.css" />
+  <link rel="stylesheet" href="../css/components.css" />
+</head>
+<body data-shell="true">
+  <main class="screen app-screen decks-app-screen">
+    <header class="app-topbar">
+      <button class="icon-button" data-drawer-open type="button" aria-label="Abrir menu">☰</button>
+      <div class="app-title-block">
+        <h1 class="app-title">Suinda</h1>
+        <p id="pendingCardsLine" class="app-subtitle">Cartoes pendentes</p>
+      </div>
+      <div class="app-actions">
+        <a class="icon-button" href="card-browser.html" aria-label="Navegador">⌕</a>
+        <button id="syncTopBtn" class="icon-button" type="button" aria-label="Sincronizar">↻</button>
+        <button class="icon-button" data-menu-toggle="decksMenu" type="button" aria-label="Acoes">⋮</button>
+      </div>
+
+      <div id="decksMenu" class="app-menu">
+        <button data-open-import type="button">Importar</button>
+        <button data-open-deck-modal type="button">Criar baralho</button>
+        <a href="deck-options.html">Opcoes de baralho</a>
+        <a href="card-browser.html">Navegador de cartoes</a>
+        <button data-logout type="button">Sair</button>
+      </div>
+    </header>
+
+    <section id="deckList" class="deck-tree-list"></section>
+
+    <div class="fab-speed-dial" id="deckFabMenu" aria-hidden="true">
+      <button class="fab-action" data-open-import type="button"><span>Importar arquivo</span><strong>⇩</strong></button>
+      <button class="fab-action" data-open-deck-modal type="button"><span>Criar baralho</span><strong>▣</strong></button>
+      <button class="fab-action" data-open-card-modal type="button"><span>Adicionar</span><strong>✚</strong></button>
+    </div>
+
+    <button class="floating-add" id="deckFabButton" type="button" aria-label="Adicionar">+</button>
+    <input id="quickImportFile" class="hidden" type="file" accept=".apkg,.txt,.csv" />
+
+    <dialog id="quickDeckDialog" class="app-dialog">
+      <form id="quickDeckForm" method="dialog">
+        <h2>Criar baralho</h2>
+        <input id="quickDeckTitle" type="text" placeholder="Nome do baralho" autocomplete="off" />
+        <div class="dialog-actions">
+          <button value="cancel" type="button" data-close-dialog>Cancelar</button>
+          <button class="primary-dialog-action" value="ok" type="submit">OK</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="deckContextDialog" class="app-dialog deck-context-dialog">
+      <form method="dialog">
+        <h2 id="deckContextTitle">Baralho</h2>
+        <div class="deck-context-actions">
+          <button type="button" data-deck-context-action="add">Adicionar</button>
+          <button type="button" data-deck-context-action="browse">Navegar pelos cartoes</button>
+          <button type="button" data-deck-context-action="rename">Renomear baralho</button>
+          <button type="button" data-deck-context-action="subdeck">Criar sub-baralho</button>
+          <button type="button" data-deck-context-action="options">Opcoes de baralho</button>
+          <button type="button" data-deck-context-action="custom-study">Estudo personalizado</button>
+          <button type="button" data-deck-context-action="export">Exportar baralho</button>
+          <button type="button" data-deck-context-action="shortcut">Criar atalho</button>
+          <button type="button" data-deck-context-action="description">Editar descricao</button>
+          <button type="button" data-deck-context-action="delete">Excluir baralho</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="quickCardDialog" class="app-dialog add-card-dialog">
+      <form id="quickCardForm" method="dialog">
+        <div class="dialog-topbar">
+          <button type="button" data-close-dialog aria-label="Voltar">‹</button>
+          <h2>Adicionar</h2>
+          <button class="dialog-save-icon" type="submit" aria-label="Salvar">✓</button>
+        </div>
+
+        <label>Tipo
+          <select id="quickCardType">
+            <option value="basic">Pergunta e resposta</option>
+            <option value="image_occlusion">Oclusao de imagem</option>
+          </select>
+        </label>
+
+        <label>Baralho
+          <select id="quickCardDeck"></select>
+        </label>
+
+        <label>Frente
+          <textarea id="quickCardFront" rows="3"></textarea>
+        </label>
+
+        <label>Verso
+          <textarea id="quickCardBack" rows="3"></textarea>
+        </label>
+
+        <label>Tags
+          <input id="quickCardTags" type="text" placeholder="Opcional" />
+        </label>
+      </form>
+    </dialog>
+
+    <footer class="study-day-footer">
+      <p id="ankiTodayLine">Carregando estudo de hoje...</p>
+    </footer>
+  </main>
+
+  <script src="../js/storage.js"></script>
+  <script src="../js/mock.js"></script>
+  <script src="../js/api.js"></script>
+  <script src="../js/auth.js"></script>
+  <script src="../js/suinda-shell.js"></script>
+  <script src="../js/progress.js"></script>
+  <script src="../js/scheduler.js"></script>
+  <script src="../js/card-progress.js"></script>
+  <script src="../js/ui.js"></script>
+  <script src="../js/anki.js"></script>
+  <script src="../js/app.js"></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", () => renderAnkiTodayLine("ankiTodayLine"));
+  </script>
+</body>
+</html>

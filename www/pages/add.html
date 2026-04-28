@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Adicionar - Suinda</title>
+  <link rel="stylesheet" href="../css/variables.css" />
+  <link rel="stylesheet" href="../css/global.css" />
+  <link rel="stylesheet" href="../css/components.css" />
+</head>
+<body data-anki-page="add" data-shell="true">
+  <main class="screen app-screen with-bottom-nav">
+    <header class="app-topbar">
+      <button class="icon-button" data-drawer-open type="button" aria-label="Abrir menu">☰</button>
+      <div>
+        <p class="eyebrow">Adicionar</p>
+        <h1 class="app-title">Conteúdo</h1>
+        <p class="app-subtitle">Criar, importar e gerenciar</p>
+      </div>
+      <button class="icon-button" data-menu-toggle="addMenu" type="button" aria-label="Ações">⋮</button>
+      <div id="addMenu" class="app-menu">
+        <a href="decks.html">Baralhos</a>
+        <a href="card-browser.html">Navegador</a>
+        <button data-logout type="button">Sair</button>
+      </div>
+    </header>
+
+    <p id="addMessage" class="message"></p>
+
+    <section id="deck" class="card form-card admin-only">
+      <h2>Criar baralho</h2>
+      <form id="deckForm" class="form-card">
+        <label for="deckTitle">Nome</label>
+        <input id="deckTitle" type="text" required placeholder="Ex.: Anatomia" />
+        <label for="deckCategory">Categoria</label>
+        <input id="deckCategory" type="text" placeholder="Geral" />
+        <label for="deckDescription">Descrição</label>
+        <textarea id="deckDescription" placeholder="Resumo do baralho"></textarea>
+        <button class="btn btn-primary" type="submit">Criar baralho</button>
+      </form>
+    </section>
+
+    <section class="card form-card admin-only">
+      <h2>Adicionar cartão</h2>
+      <form id="cardForm" class="form-card">
+        <label for="cardDeck">Baralho</label>
+        <select id="cardDeck" required></select>
+        <label for="cardType">Tipo</label>
+        <select id="cardType">
+          <option value="basic">Pergunta e resposta</option>
+          <option value="image_occlusion">Oclusão de imagem</option>
+        </select>
+        <label for="cardFront">Pergunta</label>
+        <textarea id="cardFront" required placeholder="Pergunta"></textarea>
+        <div class="tts-row">
+          <button id="speakFrontBtn" class="btn btn-secondary" type="button">Ouvir pergunta</button>
+          <button id="recordAudioBtn" class="btn btn-secondary" type="button">Gravar áudio</button>
+        </div>
+        <label for="cardBack">Resposta</label>
+        <textarea id="cardBack" required placeholder="Resposta"></textarea>
+        <label for="cardImage">Imagem</label>
+        <input id="cardImage" type="file" accept="image/*" />
+        <div id="occlusionEditor" class="occlusion-editor hidden"></div>
+        <label for="cardAudio">Áudio</label>
+        <input id="cardAudio" type="file" accept="audio/*" />
+        <button class="btn btn-primary" type="submit">Adicionar cartão</button>
+      </form>
+    </section>
+
+    <section id="import" class="card form-card admin-only">
+      <h2>Importar</h2>
+      <form id="importForm" class="form-card">
+        <label for="importDeck">Baralho</label>
+        <select id="importDeck" required></select>
+        <label class="inline-check">
+          <input id="autoCreateDeckFromApkg" type="checkbox" checked />
+          Criar baralho automaticamente ao importar .apkg
+        </label>
+        <label for="importFile">Arquivo Anki ou texto</label>
+        <input id="importFile" type="file" accept=".apkg,.txt,.csv" />
+        <label for="importContent">Ou cole o conteúdo</label>
+        <textarea id="importContent" placeholder="Pergunta;Resposta"></textarea>
+        <button class="btn btn-primary" type="submit">Importar</button>
+      </form>
+    </section>
+
+    <section class="card admin-only">
+      <div class="section-head">
+        <h2>Gerenciar cartões</h2>
+        <button id="refreshManageBtn" class="btn btn-secondary" type="button">Atualizar</button>
+      </div>
+      <div id="manageCardsList" class="manage-list"></div>
+    </section>
+
+    <section id="studentAddNotice" class="card">
+      <h2>Área administrativa</h2>
+      <p>Entre com uma conta de administrador para criar, editar, excluir e importar cartões.</p>
+    </section>
+
+    <nav class="bottom-nav">
+      <a href="home.html" class="nav-item">
+        <span class="nav-icon">▦</span>
+        <span class="nav-label">Painel</span>
+      </a>
+      <a href="decks.html" class="nav-item">
+        <span class="nav-icon">▤</span>
+        <span class="nav-label">Baralhos</span>
+      </a>
+      <a href="add.html" class="nav-item active">
+        <span class="nav-icon">＋</span>
+        <span class="nav-label">Adicionar</span>
+      </a>
+      <a href="progress.html" class="nav-item">
+        <span class="nav-icon">▥</span>
+        <span class="nav-label">Progresso</span>
+      </a>
+    </nav>
+  </main>
+
+  <script src="../js/storage.js"></script>
+  <script src="../js/mock.js"></script>
+  <script src="../js/api.js"></script>
+  <script src="../js/auth.js"></script>
+  <script src="../js/suinda-shell.js"></script>
+  <script src="../js/progress.js"></script>
+  <script src="../js/anki.js"></script>
+</body>
+</html>

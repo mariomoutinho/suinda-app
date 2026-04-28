@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Estudo - Suinda</title>
+  <link rel="stylesheet" href="../css/variables.css" />
+  <link rel="stylesheet" href="../css/global.css" />
+  <link rel="stylesheet" href="../css/components.css" />
+</head>
+<body data-shell="true">
+  <main class="screen app-screen study-focus-screen">
+    <header class="app-topbar study-appbar">
+      <button class="icon-button" data-drawer-open type="button" aria-label="Abrir menu">☰</button>
+      <div class="app-title-block">
+        <h1 id="studyDeckTitle" class="app-title">Seu baralho</h1>
+        <p id="studyProgress" class="app-subtitle">Card 1 de 1</p>
+      </div>
+      <div class="app-actions">
+        <button id="speakQuestionBtn" class="icon-button" type="button" aria-label="Ouvir pergunta">▶</button>
+        <button id="playAudioBtn" class="icon-button hidden" type="button" aria-label="Reproduzir audio">♪</button>
+        <button class="icon-button" data-menu-toggle="studyContextMenu" type="button" aria-label="Acoes">⋮</button>
+      </div>
+
+      <div id="studyContextMenu" class="app-menu study-context-menu">
+        <button data-study-action="edit-note" type="button">Editar nota</button>
+        <button data-study-action="edit-tags" type="button">Editar etiquetas</button>
+        <button data-study-action="bury-card" type="button">Enterrar cartao</button>
+        <button data-study-action="suspend-card" type="button">Suspender cartao</button>
+        <button data-study-action="delete-note" type="button">Excluir nota</button>
+        <button data-study-action="mark-note" type="button">Marcar nota</button>
+        <a id="studyDeckOptionsLink" href="deck-options.html">Opcoes de baralho</a>
+        <button data-logout type="button">Sair</button>
+      </div>
+    </header>
+
+    <section class="study-mini-counts" aria-label="Cartoes pendentes">
+      <span class="count-new" id="studyNewCount">0</span>
+      <span class="count-learning" id="studyLearningCount">0</span>
+      <span class="count-review" id="studyReviewCount">0</span>
+    </section>
+
+    <div class="study-progress-bar slim">
+      <div id="studyProgressFill" class="study-progress-fill"></div>
+    </div>
+
+    <section class="study-stage">
+      <article class="study-prompt">
+        <div class="field-label">Pergunta</div>
+        <h2 id="questionText" class="study-text-main">Pergunta</h2>
+        <div id="studyMedia" class="study-media"></div>
+
+        <div id="answerBox" class="answer-box study-answer hidden">
+          <div class="field-label">Resposta</div>
+          <p id="answerText" class="study-text-main"></p>
+          <div id="answerMedia" class="study-media"></div>
+        </div>
+      </article>
+    </section>
+
+    <footer class="study-bottom-action">
+      <button id="showAnswerBtn" class="btn btn-primary study-main-btn">Mostrar resposta</button>
+
+      <div id="answerActions" class="answer-actions-grid hidden">
+        <button id="wrongBtn" class="btn btn-danger answer-btn">
+          <span class="answer-btn-label">Errei</span>
+          <span id="wrongBtnTime" class="answer-btn-time">-</span>
+        </button>
+        <button id="hardBtn" class="btn btn-warning answer-btn">
+          <span class="answer-btn-label">Dificil</span>
+          <span id="hardBtnTime" class="answer-btn-time">-</span>
+        </button>
+        <button id="easyBtn" class="btn btn-success answer-btn">
+          <span class="answer-btn-label">Facil</span>
+          <span id="easyBtnTime" class="answer-btn-time">-</span>
+        </button>
+        <button id="veryEasyBtn" class="btn btn-primary answer-btn">
+          <span class="answer-btn-label">Muito facil</span>
+          <span id="veryEasyBtnTime" class="answer-btn-time">-</span>
+        </button>
+      </div>
+    </footer>
+  </main>
+
+  <script src="../js/storage.js"></script>
+  <script src="../js/mock.js"></script>
+  <script src="../js/api.js"></script>
+  <script src="../js/auth.js"></script>
+  <script src="../js/suinda-shell.js"></script>
+  <script src="../js/progress.js"></script>
+  <script src="../js/scheduler.js"></script>
+  <script src="../js/card-progress.js"></script>
+  <script src="../js/anki.js"></script>
+  <script src="../js/study.js"></script>
+</body>
+</html>
