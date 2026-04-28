@@ -68,7 +68,7 @@ final class App
             }
 
             if ($method === 'DELETE' && preg_match('#^/decks/(\d+)$#', $path, $match)) {
-                $this->deleteDeck((int) $match[1]);
+                $this->deleteDeck((string) $user['role'], (int) $match[1]);
                 return;
             }
 
@@ -536,8 +536,10 @@ SQL);
         $this->showDeck($id);
     }
 
-    private function deleteDeck(int $id): void
+    private function deleteDeck(string $role, int $id): void
     {
+        $this->requireAdmin($role);
+
         $current = $this->findDeckSummary($id);
         if (!$current) {
             $this->json(['error' => 'Baralho nao encontrado.'], 404);
@@ -550,16 +552,7 @@ SQL);
 
         try {
             $stmt = $this->db->prepare(
-                'UPDATE cards
-                 SET active = 0
-                 WHERE deck_id IN (
-                    SELECT id FROM decks WHERE active = 1 AND (id = ? OR title LIKE ?)
-                 )'
-            );
-            $stmt->execute([$id, $titlePrefix]);
-
-            $stmt = $this->db->prepare(
-                'UPDATE decks SET active = 0 WHERE active = 1 AND (id = ? OR title LIKE ?)'
+                'DELETE FROM decks WHERE id = ? OR title LIKE ?'
             );
             $stmt->execute([$id, $titlePrefix]);
 
@@ -569,7 +562,7 @@ SQL);
             throw $error;
         }
 
-        $this->json(['ok' => true]);
+        $this->json(['ok' => true, 'deleted' => 'permanent']);
     }
 
     private function listCards(int $deckId): void
