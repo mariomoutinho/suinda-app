@@ -2068,9 +2068,14 @@
 
 .occlusion-mask {
   position: absolute;
-  background: rgba(217, 164, 65, 0.88);
-  border: 2px solid rgba(31, 77, 92, 0.8);
-  border-radius: 4px;
+  background: #ffeba2;
+  border: 2px solid #2d2d2d;
+  border-radius: 0;
+  box-sizing: border-box;
+}
+
+.occlusion-mask-target {
+  background: #ff7e7e;
 }
 
 .study-media {

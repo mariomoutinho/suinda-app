@@ -209,7 +209,8 @@ async function startStudyPage() {
   }
 
   function renderMask(mask) {
-    return `<span class="occlusion-mask" style="left:${mask.x}%;top:${mask.y}%;width:${mask.width}%;height:${mask.height}%;"></span>`;
+    const targetClass = mask.isTarget ? " occlusion-mask-target" : "";
+    return `<span class="occlusion-mask${targetClass}" style="left:${mask.x}%;top:${mask.y}%;width:${mask.width}%;height:${mask.height}%;"></span>`;
   }
 
   function renderStudyMedia(showAnswer) {

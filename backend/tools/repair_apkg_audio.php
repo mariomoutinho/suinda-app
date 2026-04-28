@@ -74,8 +74,7 @@ preg_match_all('/[A-Za-z0-9][A-Za-z0-9 _.,()#@+\-=]*\.(?:mp3|m4a|aac|ogg|oga|wav
 
 $mediaMap = [];
 foreach (array_values(array_unique($matches[0])) as $index => $fileName) {
-    $cleanName = preg_replace('/^\d+(?=[A-Za-z_-])/', '', $fileName) ?? $fileName;
-    $mediaMap[$cleanName] = (string) $index;
+    $mediaMap[$fileName] = (string) $index;
 }
 
 $source = new PDO('sqlite:' . $collection);

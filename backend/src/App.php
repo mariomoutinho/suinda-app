@@ -802,10 +802,10 @@ SQL);
         $mediaIndex = $this->buildAnkiMediaIndex($tmpDir, $mediaMap);
         $created = 0;
         $stmt = $this->db->prepare(
-            'INSERT INTO cards (deck_id, question, answer, question_html, answer_html, card_type, image_data, audio_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+            'INSERT INTO cards (deck_id, question, answer, question_html, answer_html, card_type, image_data, audio_data, occlusion_masks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
         $updateExisting = $this->db->prepare(
-            'UPDATE cards SET question = ?, answer = ?, question_html = ?, answer_html = ?, card_type = ?, image_data = ?, audio_data = ? WHERE id = ?'
+            'UPDATE cards SET question = ?, answer = ?, question_html = ?, answer_html = ?, card_type = ?, image_data = ?, audio_data = ?, occlusion_masks = ? WHERE id = ?'
         );
         $existingCards = $this->db->prepare('SELECT id, question FROM cards WHERE deck_id = ? AND active = 1');
         $existingCards->execute([$deckId]);
@@ -830,6 +830,24 @@ SQL);
                 $mediaHtml = $frontHtml . $backHtml . implode('', $fields);
                 $imageData = $this->extractAnkiMediaData($mediaHtml, $mediaIndex, 'image');
                 $audioData = $this->extractAnkiMediaData($mediaHtml, $mediaIndex, 'audio');
+                $cardType = 'basic';
+                $occlusionMasks = null;
+
+                $occlusion = $this->extractAnkiImageOcclusion($fields, $mediaIndex);
+                if ($occlusion) {
+                    $cardType = 'image_occlusion';
+                    $imageData = $occlusion['imageData'] ?? $imageData;
+                    $occlusionMasks = $occlusion['masks'];
+                    $label = $this->ankiHtmlToText((string) ($fields[1] ?? ''));
+                    if ($label !== '') {
+                        $sourceId = $this->ankiHtmlToText((string) ($fields[0] ?? ''));
+                        $suffix = preg_match('/-ao-(\d+)$/i', $sourceId, $match) ? ' #' . $match[1] : '';
+                        $question = trim($label . $suffix);
+                        $answer = $label;
+                        $questionHtml = htmlspecialchars($label, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+                        $answerHtml = $questionHtml;
+                    }
+                }
 
                 if ($question === '' || $answer === '') {
                     continue;
@@ -838,9 +856,9 @@ SQL);
                 $existingId = $existingByQuestion[$question] ?? null;
 
                 if ($existingId) {
-                    $updateExisting->execute([$question, $answer, $questionHtml, $answerHtml, 'basic', $imageData, $audioData, $existingId]);
+                    $updateExisting->execute([$question, $answer, $questionHtml, $answerHtml, $cardType, $imageData, $audioData, $occlusionMasks ? json_encode($occlusionMasks) : null, $existingId]);
                 } else {
-                    $stmt->execute([$deckId, $question, $answer, $questionHtml, $answerHtml, 'basic', $imageData, $audioData]);
+                    $stmt->execute([$deckId, $question, $answer, $questionHtml, $answerHtml, $cardType, $imageData, $audioData, $occlusionMasks ? json_encode($occlusionMasks) : null]);
                     $existingByQuestion[$question] = (int) $this->db->lastInsertId();
                 }
 
@@ -1223,7 +1241,7 @@ SQL);
 
         $map = [];
         foreach (array_values(array_unique($matches[0])) as $index => $fileName) {
-            $map[(string) $index] = preg_replace('/^\d+(?=[A-Za-z_-])/', '', $fileName) ?? $fileName;
+            $map[(string) $index] = $fileName;
         }
 
         return $map;
@@ -1305,6 +1323,156 @@ SQL);
         }
 
         return null;
+    }
+
+    private function extractAnkiImageOcclusion(array $fields, array $mediaIndex): ?array
+    {
+        $baseImage = $this->extractFirstImageSource((string) ($fields[2] ?? ''));
+        $questionSvg = null;
+
+        foreach ($fields as $field) {
+            foreach ($this->extractImageSources((string) $field) as $source) {
+                if (preg_match('/-Q\.svg$/i', $this->normalizeAnkiMediaName($source))) {
+                    $questionSvg = $source;
+                    break 2;
+                }
+            }
+        }
+
+        if (!$baseImage || !$questionSvg) {
+            return null;
+        }
+
+        $svg = $this->extractAnkiMediaText($questionSvg, $mediaIndex);
+        if ($svg === null) {
+            return null;
+        }
+
+        $masks = $this->parseAnkiOcclusionMasks($svg);
+        if (!$masks) {
+            return null;
+        }
+
+        return [
+            'imageData' => $this->getAnkiMediaDataByName($baseImage, $mediaIndex, 'image'),
+            'masks' => $masks,
+        ];
+    }
+
+    private function extractImageSources(string $html): array
+    {
+        if (!preg_match_all('/<img[^>]+src=["\']([^"\']+)["\']/i', $html, $matches)) {
+            return [];
+        }
+
+        return array_map(
+            fn (string $source): string => html_entity_decode($source, ENT_QUOTES | ENT_HTML5, 'UTF-8'),
+            $matches[1]
+        );
+    }
+
+    private function extractFirstImageSource(string $html): ?string
+    {
+        $sources = $this->extractImageSources($html);
+        return $sources[0] ?? null;
+    }
+
+    private function extractAnkiMediaText(string $fileName, array $mediaIndex): ?string
+    {
+        $path = $this->resolveAnkiMediaPath($fileName, $mediaIndex);
+        if (!$path) {
+            return null;
+        }
+
+        return (string) file_get_contents($path);
+    }
+
+    private function getAnkiMediaDataByName(string $fileName, array $mediaIndex, string $type): ?string
+    {
+        $path = $this->resolveAnkiMediaPath($fileName, $mediaIndex);
+        if (!$path) {
+            return null;
+        }
+
+        $mime = mime_content_type($path) ?: $this->guessMediaMime($fileName, $type);
+        return 'data:' . $mime . ';base64,' . base64_encode((string) file_get_contents($path));
+    }
+
+    private function resolveAnkiMediaPath(string $fileName, array $mediaIndex): ?string
+    {
+        $normalized = $this->normalizeAnkiMediaName($fileName);
+        $path = $mediaIndex[$normalized] ?? $mediaIndex[strtolower($normalized)] ?? null;
+
+        if (!$path || !is_file($path)) {
+            return null;
+        }
+
+        if (!$this->isZstdFile($path)) {
+            return $path;
+        }
+
+        $target = $path . '.decoded';
+        if (!$this->decompressZstdFile($path, $target)) {
+            return null;
+        }
+
+        return $target;
+    }
+
+    private function parseAnkiOcclusionMasks(string $svg): array
+    {
+        $width = $this->extractSvgNumber($svg, 'width');
+        $height = $this->extractSvgNumber($svg, 'height');
+
+        if ((!$width || !$height) && preg_match('/\bviewBox=["\']\s*[-.\d]+\s+[-.\d]+\s+([-\.\d]+)\s+([-\.\d]+)/i', $svg, $viewBox)) {
+            $width = $width ?: (float) $viewBox[1];
+            $height = $height ?: (float) $viewBox[2];
+        }
+
+        if (!$width || !$height) {
+            return [];
+        }
+
+        if (!preg_match_all('/<rect\b[^>]*>/i', $svg, $matches)) {
+            return [];
+        }
+
+        $masks = [];
+        foreach ($matches[0] as $rect) {
+            $x = $this->extractSvgNumber($rect, 'x');
+            $y = $this->extractSvgNumber($rect, 'y');
+            $rectWidth = $this->extractSvgNumber($rect, 'width');
+            $rectHeight = $this->extractSvgNumber($rect, 'height');
+
+            if ($rectWidth === null || $rectHeight === null || $rectWidth <= 0 || $rectHeight <= 0) {
+                continue;
+            }
+
+            $masks[] = [
+                'x' => max(0, min(100, (($x ?? 0) / $width) * 100)),
+                'y' => max(0, min(100, (($y ?? 0) / $height) * 100)),
+                'width' => max(0, min(100, ($rectWidth / $width) * 100)),
+                'height' => max(0, min(100, ($rectHeight / $height) * 100)),
+                'isTarget' => $this->isAnkiTargetOcclusionMask($rect),
+            ];
+        }
+
+        return $masks;
+    }
+
+    private function isAnkiTargetOcclusionMask(string $rect): bool
+    {
+        return (bool) preg_match('/\bclass=["\'][^"\']*\bqshape\b/i', $rect)
+            || (bool) preg_match('/\bfill=["\']#?ff7e7e["\']/i', $rect);
+    }
+
+    private function extractSvgNumber(string $source, string $attribute): ?float
+    {
+        if (!preg_match('/\b' . preg_quote($attribute, '/') . '=["\']\s*(-?\d+(?:\.\d+)?)/i', $source, $match)) {
+            return null;
+        }
+
+        return (float) $match[1];
     }
 
     private function normalizeAnkiMediaName(string $fileName): string

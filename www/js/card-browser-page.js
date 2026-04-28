@@ -252,12 +252,13 @@ function renderBrowserPreviewMedia(card, showAnswer) {
   media.innerHTML = "";
   if (!card?.imageData) return;
 
-  const masks = card.cardType === "occlusion" && !showAnswer ? (card.occlusionMasks || []) : [];
+  const isOcclusion = card.cardType === "image_occlusion" || card.cardType === "occlusion";
+  const masks = isOcclusion && !showAnswer ? (card.occlusionMasks || []) : [];
   media.innerHTML = `
     <div class="occlusion-frame">
       <img src="${card.imageData}" alt="Imagem do cartao" />
       ${masks.map(mask => `
-        <span class="occlusion-mask" style="
+        <span class="occlusion-mask${mask.isTarget ? " occlusion-mask-target" : ""}" style="
           left: ${Number(mask.x) || 0}%;
           top: ${Number(mask.y) || 0}%;
           width: ${Number(mask.width) || 0}%;
