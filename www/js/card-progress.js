@@ -8,7 +8,8 @@ const SUINDA_DEFAULT_DECK_OPTIONS = {
   learningSteps: "1m 10m",
   graduatingIntervalDays: 1,
   easyIntervalDays: 3,
-  insertionOrder: "oldest"
+  insertionOrder: "oldest",
+  disableAutoPlayAudio: false
 };
 
 let suindaCardProgressCache = null;

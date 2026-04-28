@@ -262,6 +262,26 @@ async function startStudyPage() {
     new Audio(state.currentCard.audioData).play();
   }
 
+  function shouldAutoPlayAudioForCurrentCard() {
+    if (!state.currentCard?.audioData) return false;
+
+    const options = typeof getDeckOptionsForDeck === "function"
+      ? getDeckOptionsForDeck(state.currentCard.deckId || deckId)
+      : {};
+
+    return !options.disableAutoPlayAudio;
+  }
+
+  function autoPlayCurrentAudio() {
+    if (!shouldAutoPlayAudioForCurrentCard()) return;
+
+    window.setTimeout(() => {
+      if (shouldAutoPlayAudioForCurrentCard()) {
+        playCurrentAudio();
+      }
+    }, 120);
+  }
+
   function closeStudyMenu() {
     document.getElementById("studyContextMenu")?.classList.remove("open");
   }
@@ -522,6 +542,7 @@ async function startStudyPage() {
 
     await loadFullCurrentCard();
     renderCurrentCard();
+    autoPlayCurrentAudio();
   }
 
   function registerAnswer(type) {
