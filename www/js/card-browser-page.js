@@ -96,6 +96,27 @@ function renderBrowserRows(decks) {
 let browserCurrentCard = null;
 let browserDecksCache = [];
 
+async function loadFullBrowserCard(card) {
+  if (!card?.id || typeof apiGetCard !== "function") {
+    return card;
+  }
+
+  try {
+    const fullCard = await apiGetCard(card.id);
+    if (fullCard) {
+      Object.assign(card, fullCard);
+      const index = mockCards.findIndex(item => Number(item.id) === Number(card.id));
+      if (index >= 0) {
+        mockCards[index] = { ...mockCards[index], ...fullCard };
+      }
+    }
+  } catch (error) {
+    console.warn("Nao foi possivel carregar midias do cartao.", error);
+  }
+
+  return card;
+}
+
 function renderBrowserDeckOptions(decks, selectedDeckId) {
   const deckSelect = document.getElementById("browserCardDeck");
   if (!deckSelect) return;
@@ -257,6 +278,8 @@ function renderBrowserPreview(showAnswer = false) {
   const showAnswerBtn = document.getElementById("browserPreviewShowAnswerBtn");
   const answerActions = document.getElementById("browserPreviewAnswerActions");
   const audioBtn = document.getElementById("browserPreviewAudioBtn");
+  const audioPanel = document.getElementById("browserPreviewAudioPanel");
+  const audio = document.getElementById("browserPreviewAudio");
   const hint = document.getElementById("browserPreviewDeckHint");
 
   if (question) question.textContent = draft.question;
@@ -267,11 +290,19 @@ function renderBrowserPreview(showAnswer = false) {
   showAnswerBtn?.classList.toggle("hidden", showAnswer);
   answerActions?.classList.toggle("hidden", !showAnswer);
   audioBtn?.classList.toggle("hidden", !draft.audioData);
+  audioPanel?.classList.toggle("hidden", !draft.audioData);
+  if (audio) {
+    audio.src = draft.audioData || "";
+  }
 
   renderBrowserPreviewMedia(draft, showAnswer);
 }
 
-function openBrowserPreview() {
+async function openBrowserPreview() {
+  if (browserCurrentCard) {
+    await loadFullBrowserCard(browserCurrentCard);
+  }
+
   const draft = getBrowserEditorDraft();
   if (!draft) return;
 
@@ -292,6 +323,13 @@ function closeBrowserPreview() {
 function playBrowserPreviewAudio() {
   const draft = getBrowserEditorDraft();
   if (!draft?.audioData) return;
+  const audio = document.getElementById("browserPreviewAudio");
+  if (audio) {
+    audio.currentTime = 0;
+    audio.play();
+    return;
+  }
+
   new Audio(draft.audioData).play();
 }
 

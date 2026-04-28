@@ -243,10 +243,17 @@ async function startStudyPage() {
   }
 
   function speakCurrentQuestion() {
-    if (!state.currentCard || !("speechSynthesis" in window)) return;
+    if (!state.currentCard) return;
+
+    if (state.currentCard.audioData) {
+      playCurrentAudio();
+      return;
+    }
+
+    if (!("speechSynthesis" in window)) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(state.currentCard.question);
-    utterance.lang = "pt-BR";
+    utterance.lang = /^[\x00-\x7F]+$/.test(state.currentCard.question || "") ? "en-US" : "pt-BR";
     window.speechSynthesis.speak(utterance);
   }
 

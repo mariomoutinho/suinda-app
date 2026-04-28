@@ -133,6 +133,11 @@ async function apiGetCards(deckId, options = {}) {
   return data.cards || [];
 }
 
+async function apiGetCard(cardId) {
+  const data = await apiRequest(`/cards/${cardId}`);
+  return data.card;
+}
+
 async function apiCreateDeck(deckData) {
   const data = await apiRequest("/decks", {
     method: "POST",

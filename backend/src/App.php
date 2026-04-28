@@ -77,6 +77,11 @@ final class App
                 return;
             }
 
+            if ($method === 'GET' && preg_match('#^/cards/(\d+)$#', $path, $match)) {
+                $this->showCard((int) $match[1]);
+                return;
+            }
+
             if ($method === 'POST' && preg_match('#^/decks/(\d+)/cards$#', $path, $match)) {
                 $this->createCard((int) $match[1]);
                 return;
@@ -608,6 +613,17 @@ SQL);
         $this->json(['card' => $this->getCard((int) $this->db->lastInsertId())], 201);
     }
 
+    private function showCard(int $cardId): void
+    {
+        $card = $this->getCard($cardId);
+        if (!$card) {
+            $this->json(['error' => 'Cartao nao encontrado.'], 404);
+            return;
+        }
+
+        $this->json(['card' => $card]);
+    }
+
     private function updateCard(int $userId, string $role, int $cardId): void
     {
         $this->requireAdmin($role);
@@ -682,7 +698,7 @@ SQL);
 
     private function getCard(int $cardId): array
     {
-        $stmt = $this->db->prepare('SELECT * FROM cards WHERE id = ? LIMIT 1');
+        $stmt = $this->db->prepare('SELECT * FROM cards WHERE id = ? AND active = 1 LIMIT 1');
         $stmt->execute([$cardId]);
         $card = $stmt->fetch();
 
@@ -811,8 +827,9 @@ SQL);
                 $answer = $this->ankiHtmlToText($backHtml);
                 $questionHtml = $this->sanitizeAnkiHtml($frontHtml);
                 $answerHtml = $this->sanitizeAnkiHtml($backHtml);
-                $imageData = $this->extractAnkiMediaData($frontHtml . $backHtml, $mediaIndex, 'image');
-                $audioData = $this->extractAnkiMediaData($frontHtml . $backHtml, $mediaIndex, 'audio');
+                $mediaHtml = $frontHtml . $backHtml . implode('', $fields);
+                $imageData = $this->extractAnkiMediaData($mediaHtml, $mediaIndex, 'image');
+                $audioData = $this->extractAnkiMediaData($mediaHtml, $mediaIndex, 'audio');
 
                 if ($question === '' || $answer === '') {
                     continue;
@@ -1206,7 +1223,7 @@ SQL);
 
         $map = [];
         foreach (array_values(array_unique($matches[0])) as $index => $fileName) {
-            $map[(string) $index] = $fileName;
+            $map[(string) $index] = preg_replace('/^\d+(?=[A-Za-z_-])/', '', $fileName) ?? $fileName;
         }
 
         return $map;

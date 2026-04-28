@@ -1944,6 +1944,28 @@
   white-space: pre-wrap;
 }
 
+.preview-audio-panel {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.preview-audio-panel span {
+  color: var(--primary);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.preview-audio-panel audio {
+  width: 100%;
+}
+
 .card-preview-footer {
   position: fixed;
   left: 50%;
