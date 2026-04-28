@@ -351,6 +351,8 @@ async function loadDecksFromApi() {
   try {
     const decks = await apiGetDecks();
     replaceArrayContent(mockDecks, decks);
+    removeFromStorage("suinda_local_cards");
+    removeFromStorage("suinda_local_decks");
     setDataSource("api");
     return decks;
   } catch (error) {

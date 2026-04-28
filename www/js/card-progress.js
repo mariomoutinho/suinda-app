@@ -11,6 +11,26 @@ const SUINDA_DEFAULT_DECK_OPTIONS = {
   insertionOrder: "oldest"
 };
 
+let suindaCardProgressCache = null;
+let suindaCardProgressMap = null;
+
+function getCardProgressKey(userId, cardId) {
+  return `${userId}:${cardId}`;
+}
+
+function getCardProgressMap() {
+  if (!suindaCardProgressMap) {
+    suindaCardProgressMap = new Map(
+      getAllCardProgress().map(progress => [
+        getCardProgressKey(progress.userId, progress.cardId),
+        progress
+      ])
+    );
+  }
+
+  return suindaCardProgressMap;
+}
+
 function getDeckOptionsState() {
   const stored = getFromStorage(SUINDA_DECK_OPTIONS_STORAGE_KEY);
 
@@ -89,16 +109,25 @@ function assignDeckPreset(deckId, presetId) {
 }
 
 function getAllCardProgress() {
-  return getFromStorage("suinda_card_progress") || [];
+  if (!suindaCardProgressCache) {
+    suindaCardProgressCache = getFromStorage("suinda_card_progress") || [];
+  }
+
+  return suindaCardProgressCache;
 }
 
 function saveAllCardProgress(progressList) {
+  suindaCardProgressCache = progressList;
+  suindaCardProgressMap = null;
   saveToStorage("suinda_card_progress", progressList);
 }
 
 function getCardProgress(userId, cardId) {
-  const all = getAllCardProgress();
-  return all.find(item => item.userId === userId && item.cardId === cardId) || null;
+  return getCardProgressMap().get(getCardProgressKey(userId, cardId)) || null;
+}
+
+function getCardProgressForPlanning(userId, cardId) {
+  return getCardProgress(userId, cardId) || getDefaultCardProgress(userId, cardId);
 }
 
 function upsertCardProgress(progress, options = {}) {
@@ -115,6 +144,7 @@ function upsertCardProgress(progress, options = {}) {
   }
 
   saveAllCardProgress(all);
+  getCardProgressMap().set(getCardProgressKey(progress.userId, progress.cardId), progress);
 
   if (shouldSync && typeof apiSaveCardProgress === "function") {
     apiSaveCardProgress(progress).catch(error => {
@@ -280,7 +310,7 @@ function sortDueItems(items) {
 function getDirectDueCardsForDeck(userId, deckId, now = new Date()) {
   const cards = mockCards.filter(card => Number(card.deckId) === Number(deckId));
   const enriched = cards.map(card => {
-    const progress = getOrCreateCardProgress(userId, card.id);
+    const progress = getCardProgressForPlanning(userId, card.id);
     return { card, progress };
   });
 
@@ -366,7 +396,7 @@ function getDirectStudyCountsForDeck(userId, deckId, now = new Date()) {
   };
 
   cards.forEach(card => {
-    const progress = getOrCreateCardProgress(userId, card.id);
+    const progress = getCardProgressForPlanning(userId, card.id);
 
     if (progress.state === "suspended") {
       return;
