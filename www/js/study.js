@@ -104,16 +104,33 @@ function setCardContent(element, plainText, html) {
 
 async function startStudyPage() {
   requireAuth();
+  console.time("study-load-total");
 
   const deckId = getDeckIdFromUrl();
-  const decks = await loadDecksFromApi();
-  await loadDeckDetailFromApi(deckId);
+
+  // Se o deck ja esta em cache (vindo da pagina de decks), pula o GET /decks.
+  // Isso elimina um round-trip inteiro na transicao decks -> study.
+  const hasCachedDeck = mockDecks.some(item => Number(item.id) === Number(deckId));
+
+  // Fetches independentes rodam em paralelo. Antes eram seriais (await
+  // sequencial). O tempo total agora e max(N) em vez de soma(N).
+  console.time("study-fetch-metadata");
+  await Promise.all([
+    hasCachedDeck ? Promise.resolve() : loadDecksFromApi(),
+    loadDeckDetailFromApi(deckId),
+    loadCardProgressFromApi(),
+  ]);
+  console.timeEnd("study-fetch-metadata");
+
   const scopeDeckIds = typeof getDeckScopeDeckIds === "function"
     ? getDeckScopeDeckIds(deckId)
     : [deckId];
-  await Promise.all(scopeDeckIds.map(scopedDeckId => loadCardsFromApi(scopedDeckId, { includeMedia: false })));
-  await loadCardProgressFromApi();
 
+  console.time("study-fetch-cards");
+  await Promise.all(scopeDeckIds.map(scopedDeckId => loadCardsFromApi(scopedDeckId, { includeMedia: false })));
+  console.timeEnd("study-fetch-cards");
+
+  const decks = mockDecks;
   const deck = decks.find(item => Number(item.id) === Number(deckId)) ||
     mockDecks.find(item => Number(item.id) === Number(deckId));
   const user = getCurrentUser();
@@ -582,6 +599,33 @@ async function startStudyPage() {
     }
   }
 
+  // Prefetch best-effort de midia do proximo card. Em vez de pre-carregar tudo,
+  // damos warm-up so do que vem a seguir, para evitar pausa entre cards.
+  async function prefetchCardMedia(card) {
+    if (!card?.id || typeof apiGetCard !== "function") return;
+    if (card.imageData || card.audioData) return;
+    try {
+      const fullCard = await apiGetCard(card.id);
+      if (!fullCard) return;
+      const index = mockCards.findIndex(c => Number(c.id) === Number(fullCard.id));
+      if (index >= 0) {
+        mockCards[index] = { ...mockCards[index], ...fullCard };
+      }
+    } catch (error) {
+      // Ignora silenciosamente: nao bloqueia o estudo se o prefetch falhar.
+    }
+  }
+
+  function peekNextCardAfterCurrent() {
+    const now = new Date();
+    const due = getDueCardsForDeck(user.id, deckId, now);
+    if (due.length < 2) return null;
+    const currentId = state.currentCard?.id;
+    const next = due.find(item => item.card?.id !== currentId);
+    return next?.card || null;
+  }
+
+  let firstCardRendered = false;
   async function loadNextCard() {
     state.currentCard = getNextAvailableCard();
 
@@ -590,9 +634,29 @@ async function startStudyPage() {
       return;
     }
 
-    await loadFullCurrentCard();
+    // Render imediato com o que ja temos em memoria (texto, html, mascaras).
+    // A imagem chega em background e re-renderiza apenas a media quando pronta.
     renderCurrentCard();
-    autoPlayCurrentAudio();
+
+    if (!firstCardRendered) {
+      firstCardRendered = true;
+      console.timeEnd("study-load-total");
+    }
+
+    const cardAtRenderTime = state.currentCard;
+    loadFullCurrentCard().then(() => {
+      // Se o usuario ainda esta no mesmo card, atualiza so a media e o audio.
+      if (state.currentCard?.id === cardAtRenderTime.id) {
+        renderStudyMedia(false);
+        autoPlayCurrentAudio();
+      }
+    });
+
+    // Prefetch silencioso do proximo card (sem esperar).
+    const upcoming = peekNextCardAfterCurrent();
+    if (upcoming) {
+      prefetchCardMedia(upcoming);
+    }
   }
 
   function registerAnswer(type) {
