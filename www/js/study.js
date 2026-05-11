@@ -49,11 +49,53 @@ function launchConfettiBurst() {
   }
 }
 
+function sanitizeCardHtml(html) {
+  const template = document.createElement("template");
+  template.innerHTML = String(html || "").replace(/\[sound:[^\]]+\]/gi, "");
+
+  const allowedTags = new Set([
+    "B", "STRONG", "I", "EM", "U", "BR", "HR", "DIV", "P", "SPAN",
+    "UL", "OL", "LI", "SUP", "SUB", "IMG", "FIGURE", "FIGCAPTION",
+    "TABLE", "THEAD", "TBODY", "TFOOT", "TR", "TD", "TH",
+    "H1", "H2", "H3", "H4", "H5", "H6",
+    "SVG", "G", "RECT", "CIRCLE", "ELLIPSE", "LINE", "POLYLINE",
+    "POLYGON", "PATH", "TEXT", "TSPAN", "DEFS", "USE", "IMAGE"
+  ]);
+  const allowedAttrs = new Set([
+    "src", "alt", "title", "width", "height", "viewBox", "xmlns",
+    "x", "y", "cx", "cy", "r", "rx", "ry", "x1", "x2", "y1", "y2",
+    "d", "points", "fill", "stroke", "stroke-width", "transform",
+    "href", "xlink:href", "preserveAspectRatio"
+  ]);
+
+  template.content.querySelectorAll("*").forEach(node => {
+    if (!allowedTags.has(node.tagName)) {
+      node.replaceWith(document.createTextNode(node.textContent || ""));
+      return;
+    }
+
+    [...node.attributes].forEach(attr => {
+      const name = attr.name;
+      const value = attr.value.trim();
+      if (name.toLowerCase().startsWith("on") || !allowedAttrs.has(name)) {
+        node.removeAttribute(name);
+        return;
+      }
+
+      if (/^(src|href|xlink:href)$/i.test(name) && /^(javascript|vbscript|data:text\/html)/i.test(value)) {
+        node.removeAttribute(name);
+      }
+    });
+  });
+
+  return template.innerHTML;
+}
+
 function setCardContent(element, plainText, html) {
   if (!element) return;
 
   if (html) {
-    element.innerHTML = String(html).replace(/\[sound:[^\]]+\]/gi, "");
+    element.innerHTML = sanitizeCardHtml(html);
     return;
   }
 
@@ -209,8 +251,12 @@ async function startStudyPage() {
   }
 
   function renderMask(mask) {
+    const x = Number.isFinite(Number(mask.x)) ? Number(mask.x) : 0;
+    const y = Number.isFinite(Number(mask.y)) ? Number(mask.y) : 0;
+    const width = Number.isFinite(Number(mask.width)) ? Number(mask.width) : 0;
+    const height = Number.isFinite(Number(mask.height)) ? Number(mask.height) : 0;
     const targetClass = mask.isTarget ? " occlusion-mask-target" : "";
-    return `<span class="occlusion-mask${targetClass}" style="left:${mask.x}%;top:${mask.y}%;width:${mask.width}%;height:${mask.height}%;"></span>`;
+    return `<span class="occlusion-mask${targetClass}" style="left:${x}%;top:${y}%;width:${width}%;height:${height}%;"></span>`;
   }
 
   function renderStudyMedia(showAnswer) {

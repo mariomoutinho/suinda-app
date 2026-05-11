@@ -746,6 +746,12 @@ SQL);
 
     private function importApkg(): void
     {
+        // Importar pacotes Anki grandes (anatomia com centenas de imagens) leva minutos.
+        // O timeout padrao do SAPI server (30s) matava o script no meio da transacao,
+        // deixando o deck criado mas sem cards.
+        @set_time_limit(0);
+        @ini_set('memory_limit', '1024M');
+
         $deckId = (int) ($_POST['deckId'] ?? 0);
         $autoCreateDeck = (string) ($_POST['autoCreateDeck'] ?? '1') === '1';
         $deckTitle = trim((string) ($_POST['deckTitle'] ?? ''));
@@ -797,6 +803,7 @@ SQL);
         $source = new PDO('sqlite:' . $collection);
         $source->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
         $notes = $source->query('SELECT id, mid, flds FROM notes ORDER BY id')->fetchAll();
+        $ankiCards = $this->readAnkiCards($source);
         $models = $this->readAnkiModels($source);
         $mediaMap = $this->readAnkiMediaMap($tmpDir);
         $mediaIndex = $this->buildAnkiMediaIndex($tmpDir, $mediaMap);
@@ -819,14 +826,25 @@ SQL);
         $this->db->beginTransaction();
 
         $totalNotes = count($notes);
+        $totalCards = count($ankiCards);
         $skipped = 0;
         $mediaInlined = 0;
         $skippedReasons = [];
+        $skippedDetails = [];
+        $cardRows = $totalCards > 0 ? $ankiCards : array_map(static function (array $note): array {
+            return [
+                'anki_card_id' => null,
+                'ord' => 0,
+                'note_id' => $note['id'] ?? null,
+                'mid' => $note['mid'] ?? null,
+                'flds' => $note['flds'] ?? '',
+            ];
+        }, $notes);
 
         try {
-            foreach ($notes as $note) {
-                $fields = explode("\x1f", (string) $note['flds']);
-                $rendered = $this->renderAnkiNote($note, $fields, $models);
+            foreach ($cardRows as $cardRow) {
+                $fields = explode("\x1f", (string) $cardRow['flds']);
+                $rendered = $this->renderAnkiCard($cardRow, $fields, $models);
                 $frontHtml = $rendered['front'] ?: (string) ($fields[0] ?? '');
                 $backHtml = $rendered['back'] ?: (string) ($fields[1] ?? '');
 
@@ -846,7 +864,7 @@ SQL);
                 $cardType = 'basic';
                 $occlusionMasks = null;
 
-                $modelName = (string) ($models[(string) ($note['mid'] ?? '')]['name'] ?? '');
+                $modelName = (string) ($models[(string) ($cardRow['mid'] ?? '')]['name'] ?? '');
                 $looksLikeOcclusion = stripos($modelName, 'occlusion') !== false
                     || stripos($modelName, 'oclus') !== false;
 
@@ -858,7 +876,9 @@ SQL);
                     $label = $this->ankiHtmlToText((string) ($fields[1] ?? ''));
                     if ($label !== '') {
                         $sourceId = $this->ankiHtmlToText((string) ($fields[0] ?? ''));
-                        $suffix = preg_match('/-ao-(\d+)$/i', $sourceId, $match) ? ' #' . $match[1] : '';
+                        $suffix = preg_match('/-ao-(\d+)$/i', $sourceId, $match)
+                            ? ' #' . $match[1]
+                            : ' #' . (((int) ($cardRow['ord'] ?? 0)) + 1);
                         $question = trim($label . $suffix);
                         $answer = $label;
                         $questionHtml = htmlspecialchars($label, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
@@ -878,6 +898,13 @@ SQL);
                 if ($question === '' && $answer === '' && !$hasVisualContent) {
                     $skipped++;
                     $skippedReasons['empty_card'] = ($skippedReasons['empty_card'] ?? 0) + 1;
+                    $skippedDetails[] = [
+                        'noteId' => $cardRow['note_id'] ?? null,
+                        'cardId' => $cardRow['anki_card_id'] ?? null,
+                        'ord' => (int) ($cardRow['ord'] ?? 0),
+                        'model' => $modelName,
+                        'reason' => 'empty_card',
+                    ];
                     continue;
                 }
 
@@ -897,7 +924,6 @@ SQL);
                     $updateExisting->execute([$question, $answer, $questionHtml, $answerHtml, $cardType, $imageData, $audioData, $occlusionMasks ? json_encode($occlusionMasks) : null, $existingId]);
                 } else {
                     $stmt->execute([$deckId, $question, $answer, $questionHtml, $answerHtml, $cardType, $imageData, $audioData, $occlusionMasks ? json_encode($occlusionMasks) : null]);
-                    $existingByQuestion[$dedupKey] = (int) $this->db->lastInsertId();
                 }
 
                 $created++;
@@ -909,14 +935,20 @@ SQL);
             throw $exception;
         }
 
-        $this->json([
+        $summary = [
             'imported' => $created,
             'skipped' => $skipped,
             'totalNotes' => $totalNotes,
+            'totalCards' => $totalCards,
             'mediaInlined' => $mediaInlined,
+            'mediaFiles' => count($mediaIndex),
             'skippedReasons' => (object) $skippedReasons,
+            'skippedDetails' => array_slice($skippedDetails, 0, 20),
             'deck' => $this->findDeckSummary($deckId),
-        ], 201);
+        ];
+
+        error_log('Suinda APKG import: ' . json_encode($summary, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+        $this->json($summary, 201);
     }
 
     private function createImportedDeck(string $rawTitle): int
@@ -1031,9 +1063,28 @@ SQL);
         }
     }
 
-    private function renderAnkiNote(array $note, array $fields, array $models): array
+    private function readAnkiCards(PDO $source): array
     {
-        $model = $models[(string) ($note['mid'] ?? '')] ?? null;
+        try {
+            return $source->query(
+                'SELECT cards.id AS anki_card_id,
+                    cards.nid AS note_id,
+                    cards.ord AS ord,
+                    cards.did AS deck_id,
+                    notes.mid AS mid,
+                    notes.flds AS flds
+                 FROM cards
+                 INNER JOIN notes ON notes.id = cards.nid
+                 ORDER BY cards.id'
+            )->fetchAll();
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    private function renderAnkiCard(array $card, array $fields, array $models): array
+    {
+        $model = $models[(string) ($card['mid'] ?? '')] ?? null;
 
         if (!is_array($model)) {
             return [
@@ -1050,7 +1101,8 @@ SQL);
             }
         }
 
-        $template = $model['tmpls'][0] ?? null;
+        $ord = max(0, (int) ($card['ord'] ?? 0));
+        $template = $model['tmpls'][$ord] ?? ($model['tmpls'][0] ?? null);
         if (!is_array($template)) {
             return [
                 'front' => $this->firstNonEmptyAnkiField($fields),
@@ -1058,10 +1110,10 @@ SQL);
             ];
         }
 
-        $front = $this->renderAnkiTemplate((string) ($template['qfmt'] ?? ''), $fieldMap);
+        $front = $this->renderAnkiTemplate((string) ($template['qfmt'] ?? ''), $fieldMap, $ord, 'question');
         $backTemplate = (string) ($template['afmt'] ?? '');
         $back = str_replace('{{FrontSide}}', $front, $backTemplate);
-        $back = $this->renderAnkiTemplate($back, $fieldMap);
+        $back = $this->renderAnkiTemplate($back, $fieldMap, $ord, 'answer');
         if ($front !== '') {
             $back = preg_replace('/' . preg_quote($front, '/') . '/u', '', $back, 1) ?? $back;
         }
@@ -1080,7 +1132,7 @@ SQL);
         ];
     }
 
-    private function renderAnkiTemplate(string $template, array $fields): string
+    private function renderAnkiTemplate(string $template, array $fields, int $ord = 0, string $side = 'question'): string
     {
         $rendered = $template;
 
@@ -1098,14 +1150,47 @@ SQL);
             return (string) ($fields[trim((string) $match[1])] ?? '');
         }, $rendered) ?? $rendered;
 
-        $rendered = preg_replace_callback('/{{([^}]+)}}/', function ($match) use ($fields) {
+        $rendered = preg_replace_callback('/{{([^}]+)}}/', function ($match) use ($fields, $ord, $side) {
             $name = trim((string) $match[1]);
+            if (str_starts_with(strtolower($name), 'cloze:')) {
+                $fieldName = trim(substr($name, 6));
+                return $this->renderAnkiCloze((string) ($fields[$fieldName] ?? ''), $ord + 1, $side);
+            }
+
+            if (str_contains($name, ':')) {
+                $parts = explode(':', $name);
+                $fieldName = trim((string) end($parts));
+                return (string) ($fields[$fieldName] ?? '');
+            }
+
+            if (in_array($name, ['Tags', 'Type', 'Deck', 'Subdeck', 'Card'], true)) {
+                return '';
+            }
+
             return (string) ($fields[$name] ?? '');
         }, $rendered) ?? $rendered;
 
         $rendered = preg_replace('/<\s*(script|style)[^>]*>.*?<\s*\/\s*\1\s*>/is', '', $rendered) ?? $rendered;
 
         return trim($rendered);
+    }
+
+    private function renderAnkiCloze(string $html, int $clozeNumber, string $side): string
+    {
+        if ($html === '') {
+            return '';
+        }
+
+        return preg_replace_callback('/{{c(\d+)::(.*?)(?:::.*?)?}}/s', static function (array $match) use ($clozeNumber, $side): string {
+            $number = (int) $match[1];
+            $text = (string) $match[2];
+
+            if ($side === 'answer') {
+                return $text;
+            }
+
+            return $number === $clozeNumber ? '[...]' : $text;
+        }, $html) ?? $html;
     }
 
     private function firstNonEmptyAnkiField(array $fields): string
@@ -1385,6 +1470,8 @@ SQL);
 
     private function extractAnkiMediaData(string $html, array $mediaIndex, string $type): ?string
     {
+        static $dataUrlCache = [];
+
         $fileNames = [];
 
         if ($type === 'image' && preg_match_all('/<img[^>]+src=["\']([^"\']+)["\']/i', $html, $matches)) {
@@ -1407,15 +1494,25 @@ SQL);
 
         foreach ($fileNames as $fileName) {
             $normalized = $this->normalizeAnkiMediaName($fileName);
+            $cacheKey = $type . ':' . $normalized;
+            if (array_key_exists($cacheKey, $dataUrlCache)) {
+                if ($dataUrlCache[$cacheKey] !== null) {
+                    return $dataUrlCache[$cacheKey];
+                }
+                continue;
+            }
+
             $path = $mediaIndex[$normalized] ?? $mediaIndex[strtolower($normalized)] ?? null;
 
             if (!$path || !is_file($path)) {
+                $dataUrlCache[$cacheKey] = null;
                 continue;
             }
 
             if ($this->isZstdFile($path)) {
                 $target = $path . '.decoded';
-                if (!$this->decompressZstdFile($path, $target)) {
+                if (!is_file($target) && !$this->decompressZstdFile($path, $target)) {
+                    $dataUrlCache[$cacheKey] = null;
                     continue;
                 }
 
@@ -1423,7 +1520,9 @@ SQL);
             }
 
             $mime = mime_content_type($path) ?: $this->guessMediaMime($fileName, $type);
-            return 'data:' . $mime . ';base64,' . base64_encode((string) file_get_contents($path));
+            $dataUrl = 'data:' . $mime . ';base64,' . base64_encode((string) file_get_contents($path));
+            $dataUrlCache[$cacheKey] = $dataUrl;
+            return $dataUrl;
         }
 
         return null;
@@ -1431,14 +1530,19 @@ SQL);
 
     private function extractAnkiImageOcclusion(array $fields, array $mediaIndex): ?array
     {
-        $baseImage = $this->extractFirstImageSource((string) ($fields[2] ?? ''));
+        $baseImage = null;
         $questionSvg = null;
 
         foreach ($fields as $field) {
             foreach ($this->extractImageSources((string) $field) as $source) {
-                if (preg_match('/-Q\.svg$/i', $this->normalizeAnkiMediaName($source))) {
+                $normalized = $this->normalizeAnkiMediaName($source);
+                if (preg_match('/-Q\.svg$/i', $normalized)) {
                     $questionSvg = $source;
-                    break 2;
+                    continue;
+                }
+
+                if ($baseImage === null && !preg_match('/\.(?:svg)$/i', $normalized)) {
+                    $baseImage = $source;
                 }
             }
         }
@@ -1465,14 +1569,31 @@ SQL);
 
     private function extractImageSources(string $html): array
     {
-        if (!preg_match_all('/<img[^>]+src=["\']([^"\']+)["\']/i', $html, $matches)) {
+        $sources = [];
+
+        if (preg_match_all('/<img[^>]+src=["\']([^"\']+)["\']/i', $html, $matches)) {
+            foreach ($matches[1] as $match) {
+                $sources[] = html_entity_decode($match, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            }
+        }
+
+        if (preg_match_all('/<(?:image|source)[^>]+(?:href|xlink:href|src)=["\']([^"\']+)["\']/i', $html, $matches)) {
+            foreach ($matches[1] as $match) {
+                $sources[] = html_entity_decode($match, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            }
+        }
+
+        if (preg_match_all('/url\((["\']?)([^"\')]+)\1\)/i', $html, $matches)) {
+            foreach ($matches[2] as $match) {
+                $sources[] = html_entity_decode($match, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            }
+        }
+
+        if (!$sources) {
             return [];
         }
 
-        return array_map(
-            fn (string $source): string => html_entity_decode($source, ENT_QUOTES | ENT_HTML5, 'UTF-8'),
-            $matches[1]
-        );
+        return array_values(array_unique($sources));
     }
 
     private function extractFirstImageSource(string $html): ?string
@@ -1493,34 +1614,48 @@ SQL);
 
     private function getAnkiMediaDataByName(string $fileName, array $mediaIndex, string $type): ?string
     {
+        static $cache = [];
+        $key = $type . ':' . $this->normalizeAnkiMediaName($fileName);
+        if (array_key_exists($key, $cache)) {
+            return $cache[$key];
+        }
+
         $path = $this->resolveAnkiMediaPath($fileName, $mediaIndex);
         if (!$path) {
-            return null;
+            return $cache[$key] = null;
         }
 
         $mime = mime_content_type($path) ?: $this->guessMediaMime($fileName, $type);
-        return 'data:' . $mime . ';base64,' . base64_encode((string) file_get_contents($path));
+        return $cache[$key] = 'data:' . $mime . ';base64,' . base64_encode((string) file_get_contents($path));
     }
 
     private function resolveAnkiMediaPath(string $fileName, array $mediaIndex): ?string
     {
+        static $cache = [];
         $normalized = $this->normalizeAnkiMediaName($fileName);
+        if (array_key_exists($normalized, $cache)) {
+            return $cache[$normalized];
+        }
+
         $path = $mediaIndex[$normalized] ?? $mediaIndex[strtolower($normalized)] ?? null;
 
         if (!$path || !is_file($path)) {
-            return null;
+            return $cache[$normalized] = null;
         }
 
         if (!$this->isZstdFile($path)) {
-            return $path;
+            return $cache[$normalized] = $path;
         }
 
         $target = $path . '.decoded';
+        if (is_file($target)) {
+            return $cache[$normalized] = $target;
+        }
         if (!$this->decompressZstdFile($path, $target)) {
-            return null;
+            return $cache[$normalized] = null;
         }
 
-        return $target;
+        return $cache[$normalized] = $target;
     }
 
     private function parseAnkiOcclusionMasks(string $svg): array

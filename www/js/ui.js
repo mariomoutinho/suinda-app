@@ -723,19 +723,23 @@ async function setupDeckQuickActions() {
         const imported = Number(result?.imported || 0);
         const skipped = Number(result?.skipped || 0);
         const totalNotes = Number(result?.totalNotes || 0);
+        const totalCards = Number(result?.totalCards || 0);
 
         if (imported === 0) {
           showSuindaToast(
-            `Nenhum cartao foi importado (${totalNotes} notas no pacote, ${skipped} ignoradas). Verifique se o .apkg tem cards suportados.`,
+            `Nenhum cartao foi importado (${totalNotes} notas, ${totalCards} cards no pacote, ${skipped} ignorados). Verifique os detalhes no console.`,
             "error"
           );
         } else {
           const detalhe = skipped > 0 ? `, ${skipped} ignorados` : "";
-          showSuindaToast(`${imported} cartoes importados${detalhe}.`, "success");
+          showSuindaToast(`${imported} cartoes importados de ${totalCards || imported}${detalhe}.`, "success");
         }
 
         if (skipped > 0) {
-          console.warn("Importacao .apkg: cards ignorados", result?.skippedReasons || {});
+          console.warn("Importacao .apkg: cards ignorados", {
+            reasons: result?.skippedReasons || {},
+            details: result?.skippedDetails || []
+          });
         }
       } else {
         progress?.update({ message: "Lendo arquivo de texto...", percent: 35 });
