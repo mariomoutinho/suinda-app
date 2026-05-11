@@ -253,7 +253,9 @@ function renderBrowserPreviewMedia(card, showAnswer) {
   if (!card?.imageData) return;
 
   const isOcclusion = card.cardType === "image_occlusion" || card.cardType === "occlusion";
-  const masks = isOcclusion && !showAnswer ? (card.occlusionMasks || []) : [];
+  const masks = isOcclusion
+    ? (card.occlusionMasks || []).filter(mask => !(showAnswer && mask.isTarget))
+    : [];
   media.innerHTML = `
     <div class="occlusion-frame">
       <img src="${card.imageData}" alt="Imagem do cartao" />

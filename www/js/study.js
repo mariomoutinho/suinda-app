@@ -272,8 +272,11 @@ async function startStudyPage() {
 
     if (!card.imageData) return;
 
-    const masks = card.cardType === "image_occlusion" && !showAnswer
-      ? (card.occlusionMasks || [])
+    // Em cards de oclusao de imagem, "Mostrar resposta" deve revelar apenas a
+    // mascara ativa (isTarget). As demais permanecem cobrindo suas regioes para
+    // o usuario nao ver as respostas dos outros cards do mesmo grupo.
+    const masks = card.cardType === "image_occlusion"
+      ? (card.occlusionMasks || []).filter(mask => !(showAnswer && mask.isTarget))
       : [];
     const mediaHtml = `
       <div class="occlusion-frame">
