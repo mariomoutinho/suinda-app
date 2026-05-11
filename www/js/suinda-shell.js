@@ -159,34 +159,62 @@ function showSuindaPrompt({
 }
 
 function showSuindaCardEditor({
-  title = "Editar cartao",
+  title = "Editar nota",
   fields = [],
   confirmText = "Salvar",
-  cancelText = "Cancelar"
+  cancelText = "Cancelar",
+  editor = "rich"
 } = {}) {
   return new Promise(resolve => {
     const host = ensureSuindaDialogHost();
 
+    const isRich = editor === "rich";
+
     const fieldsMarkup = fields.map((field, index) => {
-      const id = `suindaEditorField_${index}`;
-      const rows = Number(field.rows) > 0 ? Number(field.rows) : 4;
+      const fieldName = escapeSuindaShellHtml(field.name || `field_${index}`);
+      const labelText = escapeSuindaShellHtml(field.label || "");
+
+      if (!isRich) {
+        const id = `suindaEditorField_${index}`;
+        const rows = Number(field.rows) > 0 ? Number(field.rows) : 4;
+        return `
+          <label class="suinda-prompt-label" for="${id}">
+            ${labelText}
+            <textarea
+              id="${id}"
+              data-suinda-field-name="${fieldName}"
+              rows="${rows}"
+              placeholder="${escapeSuindaShellHtml(field.placeholder || "")}"
+            >${escapeSuindaShellHtml(field.value ?? "")}</textarea>
+          </label>
+        `;
+      }
+
+      // Rich field: contenteditable div com HTML preservado.
+      // value e o HTML do campo (ja sanitizado upstream em quem chama).
       return `
-        <label class="suinda-prompt-label" for="${id}">
-          ${escapeSuindaShellHtml(field.label || "")}
-          <textarea
-            id="${id}"
-            data-suinda-field-name="${escapeSuindaShellHtml(field.name || `field_${index}`)}"
-            rows="${rows}"
-            placeholder="${escapeSuindaShellHtml(field.placeholder || "")}"
-          >${escapeSuindaShellHtml(field.value ?? "")}</textarea>
-        </label>
+        <div class="suinda-rich-field">
+          <span class="suinda-rich-field-label">${labelText}</span>
+          <div
+            class="suinda-rich-editor"
+            data-suinda-field-name="${fieldName}"
+            data-suinda-rich-target="1"
+            contenteditable="true"
+            role="textbox"
+            aria-multiline="true"
+            spellcheck="true"
+          >${field.value ?? ""}</div>
+        </div>
       `;
     }).join("");
 
+    const toolbarMarkup = isRich ? buildSuindaRichToolbar() : "";
+
     host.innerHTML = `
-      <dialog class="suinda-modal suinda-modal-editor" aria-label="${escapeSuindaShellHtml(title)}">
+      <dialog class="suinda-modal suinda-modal-editor ${isRich ? "suinda-modal-rich" : ""}" aria-label="${escapeSuindaShellHtml(title)}">
         <form method="dialog" class="suinda-modal-card">
           <h2>${escapeSuindaShellHtml(title)}</h2>
+          ${toolbarMarkup}
           ${fieldsMarkup}
           <div class="suinda-modal-actions">
             <button class="suinda-modal-secondary" data-suinda-cancel type="button">${escapeSuindaShellHtml(cancelText)}</button>
@@ -203,16 +231,276 @@ function showSuindaCardEditor({
       closeSuindaDialog(null);
     });
     host.querySelector("[data-suinda-cancel]")?.addEventListener("click", () => closeSuindaDialog(null));
+
+    if (isRich) {
+      setupSuindaRichToolbar(host);
+    }
+
     host.querySelector("[data-suinda-confirm]")?.addEventListener("click", () => {
       const result = {};
       host.querySelectorAll("[data-suinda-field-name]").forEach(node => {
-        result[node.dataset.suindaFieldName] = node.value;
+        if (node.dataset.suindaRichTarget) {
+          result[node.dataset.suindaFieldName] = node.innerHTML;
+        } else {
+          result[node.dataset.suindaFieldName] = node.value;
+        }
       });
       closeSuindaDialog(result);
     });
     dialog.showModal();
     setTimeout(() => host.querySelector("[data-suinda-field-name]")?.focus(), 60);
   });
+}
+
+function buildSuindaRichToolbar() {
+  const tools = [
+    { cmd: "bold", label: "<b>B</b>", title: "Negrito (Ctrl+B)" },
+    { cmd: "italic", label: "<i>I</i>", title: "Italico (Ctrl+I)" },
+    { cmd: "underline", label: "<u>U</u>", title: "Sublinhado (Ctrl+U)" },
+    { cmd: "superscript", label: "x<sup>2</sup>", title: "Sobrescrito" },
+    { cmd: "subscript", label: "x<sub>2</sub>", title: "Subscrito" },
+    { separator: true },
+    { color: "foreColor", label: "A", title: "Cor do texto" },
+    { color: "hiliteColor", label: "&#9646;", title: "Cor de destaque" },
+    { cmd: "removeFormat", label: "&times;", title: "Limpar formatacao" },
+    { separator: true },
+    { cmd: "insertUnorderedList", label: "&bull; &mdash;", title: "Lista" },
+    { cmd: "insertOrderedList", label: "1.", title: "Lista numerada" },
+    { align: "justifyLeft", label: "&#8676;", title: "Alinhar a esquerda" },
+    { align: "justifyCenter", label: "&#8644;", title: "Centralizar" },
+    { align: "justifyRight", label: "&#8677;", title: "Alinhar a direita" },
+    { separator: true },
+    { file: "image", label: "&#128247;", title: "Inserir imagem", accept: "image/*" },
+    { file: "audio", label: "&#9836;", title: "Inserir audio", accept: "audio/*" },
+    { file: "video", label: "&#127909;", title: "Inserir video", accept: "video/*" },
+    { record: true, label: "&#9210;", title: "Gravar audio" },
+    { formula: true, label: "fx", title: "Inserir formula LaTeX" },
+  ];
+
+  return `
+    <div class="suinda-editor-toolbar" role="toolbar" aria-label="Ferramentas de formatacao">
+      ${tools.map(tool => {
+        if (tool.separator) return `<span class="suinda-editor-toolbar-sep" aria-hidden="true"></span>`;
+        if (tool.color) {
+          return `
+            <label class="suinda-editor-tool suinda-editor-tool-color" title="${escapeSuindaShellHtml(tool.title)}">
+              <span class="suinda-editor-tool-label">${tool.label}</span>
+              <input type="color" data-suinda-color="${tool.color}" value="#1f6feb" />
+            </label>
+          `;
+        }
+        if (tool.file) {
+          return `
+            <button type="button" class="suinda-editor-tool" data-suinda-file="${tool.file}" data-suinda-accept="${tool.accept}" title="${escapeSuindaShellHtml(tool.title)}">${tool.label}</button>
+          `;
+        }
+        if (tool.record) {
+          return `<button type="button" class="suinda-editor-tool" data-suinda-record title="${escapeSuindaShellHtml(tool.title)}">${tool.label}</button>`;
+        }
+        if (tool.formula) {
+          return `<button type="button" class="suinda-editor-tool" data-suinda-formula title="${escapeSuindaShellHtml(tool.title)}">${tool.label}</button>`;
+        }
+        if (tool.align) {
+          return `<button type="button" class="suinda-editor-tool" data-suinda-align="${tool.align}" title="${escapeSuindaShellHtml(tool.title)}">${tool.label}</button>`;
+        }
+        return `<button type="button" class="suinda-editor-tool" data-suinda-cmd="${tool.cmd}" title="${escapeSuindaShellHtml(tool.title)}">${tool.label}</button>`;
+      }).join("")}
+      <input type="file" hidden data-suinda-file-input="image" accept="image/*" />
+      <input type="file" hidden data-suinda-file-input="audio" accept="audio/*" />
+      <input type="file" hidden data-suinda-file-input="video" accept="video/*" />
+    </div>
+  `;
+}
+
+function setupSuindaRichToolbar(host) {
+  const editors = Array.from(host.querySelectorAll("[data-suinda-rich-target]"));
+  let activeEditor = editors[0] || null;
+  let savedRange = null;
+
+  function saveSelection() {
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0) {
+      const range = sel.getRangeAt(0);
+      // Confirma que a selecao esta dentro de um dos editores.
+      if (editors.some(ed => ed.contains(range.commonAncestorContainer))) {
+        savedRange = range.cloneRange();
+        activeEditor = editors.find(ed => ed.contains(range.commonAncestorContainer)) || activeEditor;
+      }
+    }
+  }
+
+  function restoreSelection() {
+    if (!savedRange) return;
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(savedRange);
+  }
+
+  editors.forEach(ed => {
+    ed.addEventListener("focus", () => { activeEditor = ed; });
+    ed.addEventListener("keyup", saveSelection);
+    ed.addEventListener("mouseup", saveSelection);
+  });
+
+  function runCommand(command, value) {
+    restoreSelection();
+    if (!activeEditor) return;
+    activeEditor.focus();
+    document.execCommand(command, false, value);
+    saveSelection();
+  }
+
+  function insertHtml(html) {
+    restoreSelection();
+    if (!activeEditor) return;
+    activeEditor.focus();
+    document.execCommand("insertHTML", false, html);
+    saveSelection();
+  }
+
+  // Botoes simples (preventDefault no mousedown impede que o botao roube o
+  // foco do editor; a selecao continua valida durante o execCommand).
+  host.querySelectorAll("[data-suinda-cmd]").forEach(btn => {
+    btn.addEventListener("mousedown", event => {
+      event.preventDefault();
+      saveSelection();
+    });
+    btn.addEventListener("click", event => {
+      event.preventDefault();
+      runCommand(btn.dataset.suindaCmd);
+    });
+  });
+
+  host.querySelectorAll("[data-suinda-align]").forEach(btn => {
+    btn.addEventListener("mousedown", event => { event.preventDefault(); saveSelection(); });
+    btn.addEventListener("click", event => { event.preventDefault(); runCommand(btn.dataset.suindaAlign); });
+  });
+
+  host.querySelectorAll("[data-suinda-color]").forEach(input => {
+    const command = input.dataset.suindaColor;
+    const wrapper = input.closest(".suinda-editor-tool");
+    wrapper?.addEventListener("mousedown", event => {
+      // Preserva selecao antes do picker abrir.
+      if (event.target.tagName !== "INPUT") {
+        event.preventDefault();
+      }
+      saveSelection();
+    });
+    input.addEventListener("input", () => runCommand(command, input.value));
+  });
+
+  host.querySelectorAll("[data-suinda-file]").forEach(btn => {
+    btn.addEventListener("mousedown", event => { event.preventDefault(); saveSelection(); });
+    btn.addEventListener("click", event => {
+      event.preventDefault();
+      const kind = btn.dataset.suindaFile;
+      const input = host.querySelector(`[data-suinda-file-input="${kind}"]`);
+      input?.click();
+    });
+  });
+
+  host.querySelectorAll("[data-suinda-file-input]").forEach(input => {
+    input.addEventListener("change", async () => {
+      const file = input.files?.[0];
+      input.value = "";
+      if (!file) return;
+      try {
+        const dataUrl = await readSuindaFileAsDataURL(file);
+        const kind = input.dataset.suindaFileInput;
+        let html;
+        if (kind === "image") {
+          html = `<img src="${dataUrl}" alt="${escapeSuindaShellHtml(file.name || "imagem")}" />`;
+        } else if (kind === "audio") {
+          html = `<audio controls src="${dataUrl}"></audio>`;
+        } else if (kind === "video") {
+          html = `<video controls src="${dataUrl}" style="max-width:100%"></video>`;
+        }
+        if (html) insertHtml(html);
+      } catch (error) {
+        console.error("Falha ao ler arquivo de midia.", error);
+        showSuindaToast("Nao foi possivel ler o arquivo.", "error");
+      }
+    });
+  });
+
+  host.querySelector("[data-suinda-formula]")?.addEventListener("click", async event => {
+    event.preventDefault();
+    saveSelection();
+    const latex = await showSuindaPrompt({
+      title: "Inserir formula LaTeX",
+      label: "Digite a expressao em LaTeX (ex: a^2 + b^2 = c^2)",
+      multiline: false,
+    });
+    if (!latex) return;
+    // Inserimos a formula literal em \\( \\) - renderizacao de MathJax/KaTeX
+    // pode ser plugada depois sem mudar o conteudo armazenado.
+    insertHtml(`\\(${latex}\\)`);
+  });
+
+  host.querySelector("[data-suinda-record]")?.addEventListener("click", async event => {
+    event.preventDefault();
+    saveSelection();
+    await startSuindaAudioRecording(host, insertHtml);
+  });
+}
+
+function readSuindaFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function startSuindaAudioRecording(host, insertHtml) {
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    showSuindaToast("Gravacao de audio nao suportada neste navegador.", "error");
+    return;
+  }
+  const button = host.querySelector("[data-suinda-record]");
+  if (button?.dataset.suindaRecording === "1") {
+    // Para a gravacao em andamento.
+    button.__suindaStop?.();
+    return;
+  }
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (error) {
+    showSuindaToast("Permissao de microfone negada.", "error");
+    return;
+  }
+
+  const recorder = new MediaRecorder(stream);
+  const chunks = [];
+  recorder.ondataavailable = event => { if (event.data?.size) chunks.push(event.data); };
+  recorder.onstop = async () => {
+    stream.getTracks().forEach(track => track.stop());
+    if (button) {
+      button.dataset.suindaRecording = "";
+      button.classList.remove("is-recording");
+    }
+    if (!chunks.length) return;
+    const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+    try {
+      const dataUrl = await readSuindaFileAsDataURL(blob);
+      insertHtml(`<audio controls src="${dataUrl}"></audio>`);
+    } catch (error) {
+      console.error("Falha ao salvar gravacao.", error);
+      showSuindaToast("Falha ao salvar gravacao.", "error");
+    }
+  };
+  recorder.start();
+
+  if (button) {
+    button.dataset.suindaRecording = "1";
+    button.classList.add("is-recording");
+    button.__suindaStop = () => recorder.stop();
+  }
+
+  showSuindaToast("Gravando audio... clique no botao para parar.");
 }
 
 function showSuindaToast(message, type = "info") {

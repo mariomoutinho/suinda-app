@@ -59,14 +59,42 @@ function sanitizeCardHtml(html) {
     "TABLE", "THEAD", "TBODY", "TFOOT", "TR", "TD", "TH",
     "H1", "H2", "H3", "H4", "H5", "H6",
     "SVG", "G", "RECT", "CIRCLE", "ELLIPSE", "LINE", "POLYLINE",
-    "POLYGON", "PATH", "TEXT", "TSPAN", "DEFS", "USE", "IMAGE"
+    "POLYGON", "PATH", "TEXT", "TSPAN", "DEFS", "USE", "IMAGE",
+    "AUDIO", "VIDEO", "SOURCE", "FONT"
   ]);
   const allowedAttrs = new Set([
     "src", "alt", "title", "width", "height", "viewBox", "xmlns",
     "x", "y", "cx", "cy", "r", "rx", "ry", "x1", "x2", "y1", "y2",
     "d", "points", "fill", "stroke", "stroke-width", "transform",
-    "href", "xlink:href", "preserveAspectRatio"
+    "href", "xlink:href", "preserveAspectRatio",
+    "controls", "autoplay", "loop", "muted", "preload", "type",
+    "color", "face", "size", "style"
   ]);
+
+  // Apenas estas propriedades do atributo style sao preservadas (cor/destaque/
+  // alinhamento usados pela toolbar do editor rico). Tudo o mais e descartado.
+  const allowedStyleProps = new Set([
+    "color", "background-color", "text-align", "font-weight", "font-style",
+    "text-decoration", "max-width"
+  ]);
+
+  function sanitizeStyle(styleValue) {
+    return String(styleValue || "")
+      .split(";")
+      .map(decl => decl.trim())
+      .filter(decl => decl.length > 0)
+      .map(decl => {
+        const colonIndex = decl.indexOf(":");
+        if (colonIndex < 0) return null;
+        const prop = decl.slice(0, colonIndex).trim().toLowerCase();
+        const val = decl.slice(colonIndex + 1).trim();
+        if (!allowedStyleProps.has(prop)) return null;
+        if (/expression\(|url\(|javascript:/i.test(val)) return null;
+        return `${prop}: ${val}`;
+      })
+      .filter(Boolean)
+      .join("; ");
+  }
 
   template.content.querySelectorAll("*").forEach(node => {
     if (!allowedTags.has(node.tagName)) {
@@ -79,6 +107,13 @@ function sanitizeCardHtml(html) {
       const value = attr.value.trim();
       if (name.toLowerCase().startsWith("on") || !allowedAttrs.has(name)) {
         node.removeAttribute(name);
+        return;
+      }
+
+      if (name === "style") {
+        const clean = sanitizeStyle(value);
+        if (clean) node.setAttribute("style", clean);
+        else node.removeAttribute("style");
         return;
       }
 
@@ -417,41 +452,55 @@ async function startStudyPage() {
   async function editCurrentNote() {
     if (!state.currentCard) return;
 
+    // Editor rico opera sobre HTML. Se nao houver HTML armazenado, usa o
+    // texto puro escapado como ponto de partida, preservando o que existir.
+    const initialQuestionHtml = state.currentCard.questionHtml
+      || escapeHtmlForRichEditor(state.currentCard.question || "");
+    const initialAnswerHtml = state.currentCard.answerHtml
+      || escapeHtmlForRichEditor(state.currentCard.answer || "");
+
     const result = await showSuindaCardEditor({
       title: "Editar nota",
       fields: [
-        {
-          name: "question",
-          label: "Frente do cartao",
-          value: state.currentCard.question || "",
-          rows: 4
-        },
-        {
-          name: "answer",
-          label: "Verso do cartao",
-          value: state.currentCard.answer || "",
-          rows: 4
-        }
+        { name: "question", label: "Frente do cartao", value: initialQuestionHtml },
+        { name: "answer", label: "Verso do cartao", value: initialAnswerHtml }
       ]
     });
 
     if (!result) return;
 
-    const nextQuestion = String(result.question ?? "").trim();
-    const nextAnswer = String(result.answer ?? "").trim();
+    const nextQuestionHtml = sanitizeCardHtml(result.question || "");
+    const nextAnswerHtml = sanitizeCardHtml(result.answer || "");
 
-    if (nextQuestion === (state.currentCard.question || "").trim() &&
-        nextAnswer === (state.currentCard.answer || "").trim()) {
-      return;
-    }
+    const nextQuestionText = htmlToPlainText(nextQuestionHtml).trim();
+    const nextAnswerText = htmlToPlainText(nextAnswerHtml).trim();
+
+    const noChange =
+      nextQuestionHtml === (state.currentCard.questionHtml || initialQuestionHtml) &&
+      nextAnswerHtml === (state.currentCard.answerHtml || initialAnswerHtml);
+    if (noChange) return;
 
     await persistCurrentCard({
-      question: nextQuestion,
-      answer: nextAnswer,
-      questionHtml: null,
-      answerHtml: null
+      question: nextQuestionText || state.currentCard.question || "",
+      answer: nextAnswerText || state.currentCard.answer || "",
+      questionHtml: nextQuestionHtml || null,
+      answerHtml: nextAnswerHtml || null
     });
     showSuindaToast("Nota atualizada.");
+  }
+
+  function escapeHtmlForRichEditor(text) {
+    return String(text)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll("\n", "<br>");
+  }
+
+  function htmlToPlainText(html) {
+    const tmp = document.createElement("div");
+    tmp.innerHTML = String(html || "");
+    return (tmp.textContent || "").replace(/\s+/g, " ").trim();
   }
 
   async function editCurrentTags() {

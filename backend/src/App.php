@@ -1024,8 +1024,9 @@ SQL);
         $html = html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $html = str_replace("\xc2\xa0", ' ', $html);
 
-        $allowed = '<b><strong><i><em><u><br><hr><div><p><span><ul><ol><li><sup><sub>'
+        $allowed = '<b><strong><i><em><u><br><hr><div><p><span><font><ul><ol><li><sup><sub>'
             . '<img><figure><figcaption>'
+            . '<audio><video><source>'
             . '<table><thead><tbody><tfoot><tr><td><th>'
             . '<h1><h2><h3><h4><h5><h6>'
             . '<svg><g><rect><circle><ellipse><line><polyline><polygon><path><text><tspan><defs><use><image>';
