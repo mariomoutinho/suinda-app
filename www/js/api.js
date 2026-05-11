@@ -1,5 +1,5 @@
 const SUINDA_API_BASE_URL =
-  localStorage.getItem("suinda_api_base_url") || "http://127.0.0.1:8000";
+  localStorage.getItem("suinda_api_base_url") || "http://127.0.0.1:8013";
 
 let suindaLastDataSource = "local";
 let suindaApiSessionRecovery = null;
