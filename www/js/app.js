@@ -21,15 +21,18 @@ document.addEventListener("DOMContentLoaded", () => {
       const password = document.getElementById("password").value.trim();
       const message = document.getElementById("loginMessage");
 
-      const user = await login(email, password);
+      const result = await login(email, password);
 
-      if (user) {
+      if (result.user) {
         message.style.color = "green";
         message.textContent = "Login realizado com sucesso.";
         window.location.href = "decks.html";
+      } else if (result.error === "api_unreachable") {
+        message.style.color = "var(--danger)";
+        message.textContent = "Nao foi possivel conectar ao servidor. Verifique se o backend esta rodando e tente novamente.";
       } else {
         message.style.color = "var(--danger)";
-        message.textContent = "E-mail ou senha inválidos.";
+        message.textContent = "E-mail ou senha invalidos.";
       }
     });
   }

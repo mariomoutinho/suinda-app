@@ -2,26 +2,14 @@ async function login(email, password) {
   try {
     const apiUser = await apiLogin(email, password);
     saveToStorage("suinda_current_user", apiUser);
-    return apiUser;
+    return { user: apiUser, error: null };
   } catch (error) {
-    console.warn("API indisponivel, usando login local.", error);
+    if (error && error.status === 401) {
+      return { user: null, error: "invalid_credentials" };
+    }
+    console.error("Falha ao contatar a API de login.", error);
+    return { user: null, error: "api_unreachable" };
   }
-
-  const user = mockUsers.find(
-    (item) => item.email === email && item.password === password && item.active
-  );
-
-  if (!user) return null;
-
-  const safeUser = {
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    role: user.role
-  };
-
-  saveToStorage("suinda_current_user", safeUser);
-  return safeUser;
 }
 
 function logout() {

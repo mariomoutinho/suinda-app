@@ -4,11 +4,32 @@ async function renderDecks() {
 
   deckList.innerHTML = "<p class=\"muted-line\">Carregando baralhos...</p>";
 
-  const decks = await loadDecksFromApi();
+  let decks;
+  try {
+    decks = await loadDecksFromApi();
+  } catch (error) {
+    console.error("Falha ao carregar baralhos da API.", error);
 
-  const sourceWarning = localStorage.getItem("suinda_last_data_source") === "local"
-    ? `<p class="message error-line">Mostrando dados locais. Verifique se o backend MySQL esta rodando e faca login novamente.</p>`
-    : "";
+    if (error && error.status === 401) {
+      logout();
+      window.location.href = "login.html";
+      return;
+    }
+
+    deckList.innerHTML = `
+      <p class="message error-line">
+        Nao foi possivel carregar seus baralhos agora. Verifique se o backend esta rodando e tente novamente.
+      </p>
+    `;
+
+    const pendingLine = document.getElementById("pendingCardsLine");
+    if (pendingLine) {
+      pendingLine.textContent = "Sem conexao com o servidor";
+    }
+    return;
+  }
+
+  const sourceWarning = "";
 
   const user = getCurrentUser();
 
@@ -39,7 +60,9 @@ async function renderDecks() {
   }
 
   if (!deckRows.length) {
-    deckList.innerHTML = sourceWarning + `<p class="muted-line">Nenhum baralho encontrado.</p>`;
+    deckList.innerHTML = `
+      <p class="muted-line">Nenhum baralho encontrado para este usuario. Crie seu primeiro baralho no botao "+".</p>
+    `;
     return;
   }
 

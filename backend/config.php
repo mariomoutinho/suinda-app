@@ -12,5 +12,5 @@ return [
         'password' => getenv('SUINDA_DB_PASSWORD') ?: '',
         'charset' => 'utf8mb4',
     ],
-    'seed_on_boot' => true,
+    'seed_on_boot' => filter_var(getenv('SUINDA_SEED_ON_BOOT'), FILTER_VALIDATE_BOOLEAN),
 ];

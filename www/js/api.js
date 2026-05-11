@@ -22,33 +22,8 @@ function setDataSource(source) {
 }
 
 async function recoverApiSession() {
-  if (suindaApiSessionRecovery) {
-    return suindaApiSessionRecovery;
-  }
-
-  suindaApiSessionRecovery = (async () => {
-    const currentUser = getFromStorage("suinda_current_user");
-    const demoUser = mockUsers.find(user => (
-      user.active && currentUser && user.email === currentUser.email
-    ));
-
-    if (!demoUser) {
-      return false;
-    }
-
-    try {
-      const apiUser = await apiLogin(demoUser.email, demoUser.password);
-      saveToStorage("suinda_current_user", apiUser);
-      return true;
-    } catch (error) {
-      clearApiToken();
-      return false;
-    }
-  })();
-
-  const recovered = await suindaApiSessionRecovery;
-  suindaApiSessionRecovery = null;
-  return recovered;
+  clearApiToken();
+  return false;
 }
 
 async function apiRequest(path, options = {}) {
@@ -328,37 +303,13 @@ function replaceArrayContent(target, source) {
   target.splice(0, target.length, ...source);
 }
 
-function mergeLocalContent() {
-  const localDecks = getFromStorage("suinda_local_decks") || [];
-  const localCards = getFromStorage("suinda_local_cards") || [];
-
-  localDecks.forEach(deck => {
-    if (!mockDecks.some(item => item.id === deck.id)) {
-      mockDecks.push(deck);
-    }
-  });
-
-  localCards.forEach(card => {
-    if (!mockCards.some(item => item.id === card.id)) {
-      mockCards.push(card);
-    }
-  });
-}
-
-mergeLocalContent();
-
 async function loadDecksFromApi() {
-  try {
-    const decks = await apiGetDecks();
-    replaceArrayContent(mockDecks, decks);
-    removeFromStorage("suinda_local_cards");
-    removeFromStorage("suinda_local_decks");
-    setDataSource("api");
-    return decks;
-  } catch (error) {
-    setDataSource("local");
-    return mockDecks;
-  }
+  const decks = await apiGetDecks();
+  replaceArrayContent(mockDecks, decks);
+  removeFromStorage("suinda_local_cards");
+  removeFromStorage("suinda_local_decks");
+  setDataSource("api");
+  return decks;
 }
 
 async function loadDeckDetailFromApi(deckId) {
