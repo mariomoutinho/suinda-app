@@ -181,6 +181,27 @@ async function startStudyPage() {
   const studyLearningCount = document.getElementById("studyLearningCount");
   const studyReviewCount = document.getElementById("studyReviewCount");
   const studyDeckOptionsLink = document.getElementById("studyDeckOptionsLink");
+  const undoBtn = document.getElementById("undoBtn");
+
+  // Pilha de undo. Guardamos apenas a ultima avaliacao para refletir o
+  // comportamento do Anki (Ctrl+Z volta um card). Cada entry e suficiente
+  // para reverter o progresso, contadores e a posicao na fila.
+  const undoStack = [];
+
+  function deepClone(value) {
+    if (typeof structuredClone === "function") return structuredClone(value);
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function isAnswerRevealed() {
+    return answerBox && !answerBox.classList.contains("hidden");
+  }
+
+  function refreshUndoButton() {
+    if (!undoBtn) return;
+    const canUndo = isAnswerRevealed() || undoStack.length > 0;
+    undoBtn.disabled = !canUndo;
+  }
 
   deckTitle.textContent = deck.title;
   if (studyDeckOptionsLink) {
@@ -265,6 +286,7 @@ async function startStudyPage() {
 
     updateAnswerButtonTimes();
     updateStudyCounts();
+    refreshUndoButton();
   }
 
   function renderMask(mask) {
@@ -686,6 +708,24 @@ async function startStudyPage() {
     let progressData = getOrCreateCardProgress(user.id, currentCard.id);
     const wasNewCard = progressData.state === "new";
 
+    // Snapshot ANTES de mutar - usado pelo Desfazer para reverter local + API.
+    // Limita a 1 entry: imitar Anki, evitar memoria crescente, manter clareza.
+    undoStack.length = 0;
+    undoStack.push({
+      kind: "answer",
+      cardId: currentCard.id,
+      progressSnapshot: deepClone(progressData),
+      counters: {
+        wrong: state.wrong,
+        hard: state.hard,
+        easy: state.easy,
+        veryEasy: state.veryEasy,
+      },
+      previousLastAnswerAt: state.lastAnswerAt,
+      previousAnswersCount: state.answers.length,
+      previousAnsweredIdsCount: state.answeredCardIdsInThisSession.length,
+    });
+
     if (progressData.state === "buried") {
       progressData.state = progressData.previousState || "review";
     }
@@ -723,13 +763,90 @@ async function startStudyPage() {
 
     updateStudyCounts();
     loadNextCard();
+    refreshUndoButton();
   }
 
-  showAnswerBtn.addEventListener("click", () => {
+  function revealAnswerView() {
     answerBox.classList.remove("hidden");
     answerActions.classList.remove("hidden");
     showAnswerBtn.classList.add("hidden");
     renderStudyMedia(true);
+    refreshUndoButton();
+  }
+
+  function hideAnswerView() {
+    answerBox.classList.add("hidden");
+    answerActions.classList.add("hidden");
+    showAnswerBtn.classList.remove("hidden");
+    renderStudyMedia(false);
+    refreshUndoButton();
+  }
+
+  function undoLastAction() {
+    // Caso 1: usuario apenas revelou a resposta - so reverte a UI, sem mexer
+    // no backend nem no progress (nenhuma avaliacao aconteceu).
+    if (isAnswerRevealed()) {
+      hideAnswerView();
+      return;
+    }
+
+    // Caso 2: usuario ja avaliou e avancou - volta para o card anterior.
+    const entry = undoStack.pop();
+    if (!entry || entry.kind !== "answer") {
+      refreshUndoButton();
+      return;
+    }
+
+    // Restaura o progress no localStorage e na API (PUT /cards/{id}/progress).
+    upsertCardProgress(entry.progressSnapshot);
+
+    // Restaura contadores e arrays da sessao.
+    state.wrong = entry.counters.wrong;
+    state.hard = entry.counters.hard;
+    state.easy = entry.counters.easy;
+    state.veryEasy = entry.counters.veryEasy;
+    state.lastAnswerAt = entry.previousLastAnswerAt;
+    state.answers.length = Math.max(0, entry.previousAnswersCount);
+    state.answeredCardIdsInThisSession.length = Math.max(0, entry.previousAnsweredIdsCount);
+
+    // Recoloca o card anterior em foco e exibe ja com resposta revelada,
+    // para o usuario poder escolher outra avaliacao sem precisar clicar
+    // em "Mostrar resposta" de novo.
+    const previousCard = mockCards.find(card => Number(card.id) === Number(entry.cardId));
+    if (previousCard) {
+      state.currentCard = previousCard;
+    }
+
+    updateStudyCounts();
+    renderCurrentCard();
+    revealAnswerView();
+    showSuindaToast("Acao desfeita.");
+  }
+
+  showAnswerBtn.addEventListener("click", revealAnswerView);
+  undoBtn?.addEventListener("click", undoLastAction);
+
+  function isTypingTarget(target) {
+    if (!target) return false;
+    if (target.isContentEditable) return true;
+    const tag = target.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+  }
+
+  function hasOpenDialog() {
+    return Boolean(document.querySelector("dialog[open]"));
+  }
+
+  document.addEventListener("keydown", event => {
+    // Ctrl/Cmd+Z. Apenas quando nao estamos em campos editaveis ou modais.
+    if (!event.ctrlKey && !event.metaKey) return;
+    if (event.key !== "z" && event.key !== "Z") return;
+    if (event.shiftKey) return; // redo: nao implementado, deixa o browser lidar
+    if (isTypingTarget(event.target)) return;
+    if (hasOpenDialog()) return;
+
+    event.preventDefault();
+    undoLastAction();
   });
 
   speakQuestionBtn?.addEventListener("click", speakCurrentQuestion);
