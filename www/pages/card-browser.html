@@ -80,15 +80,33 @@
           <select id="browserCardDeck"></select>
         </label>
 
-        <label class="editor-field">
-          <span>Frente</span>
-          <textarea id="browserCardQuestion" rows="5"></textarea>
-        </label>
+        <div id="browserCardToolbarSlot"></div>
 
-        <label class="editor-field">
-          <span>Verso</span>
-          <textarea id="browserCardAnswer" rows="5"></textarea>
-        </label>
+        <div class="editor-field suinda-rich-field">
+          <span class="suinda-rich-field-label">Frente</span>
+          <div
+            id="browserCardQuestion"
+            class="suinda-rich-editor"
+            data-suinda-rich-target="1"
+            contenteditable="true"
+            role="textbox"
+            aria-multiline="true"
+            spellcheck="true"
+          ></div>
+        </div>
+
+        <div class="editor-field suinda-rich-field">
+          <span class="suinda-rich-field-label">Verso</span>
+          <div
+            id="browserCardAnswer"
+            class="suinda-rich-editor"
+            data-suinda-rich-target="1"
+            contenteditable="true"
+            role="textbox"
+            aria-multiline="true"
+            spellcheck="true"
+          ></div>
+        </div>
       </form>
     </dialog>
 
@@ -150,6 +168,7 @@
   <script src="../js/api.js"></script>
   <script src="../js/auth.js"></script>
   <script src="../js/suinda-shell.js"></script>
+  <script src="../js/rich-editor.js"></script>
   <script src="../js/progress.js"></script>
   <script src="../js/scheduler.js"></script>
   <script src="../js/card-progress.js"></script>

@@ -138,15 +138,32 @@ function openBrowserCardEditor(card, decks) {
   renderBrowserDeckOptions(decks, card.deckId);
 
   document.getElementById("browserCardType").value = card.cardType || "basic";
-  document.getElementById("browserCardQuestion").value = browserPlainText(card.questionHtml || card.question);
-  document.getElementById("browserCardAnswer").value = browserPlainText(card.answerHtml || card.answer);
+
+  // Editor rico: popula innerHTML preservando formatacao. Fallback usa o texto
+  // puro escapado para que cards antigos sem HTML continuem editaveis.
+  const questionEditor = document.getElementById("browserCardQuestion");
+  const answerEditor = document.getElementById("browserCardAnswer");
+  if (questionEditor) {
+    questionEditor.innerHTML = card.questionHtml || escapeHtmlForRichEditor(card.question || "");
+  }
+  if (answerEditor) {
+    answerEditor.innerHTML = card.answerHtml || escapeHtmlForRichEditor(card.answer || "");
+  }
+
+  // Injeta a toolbar compartilhada e ativa os comandos, reusando os mesmos
+  // helpers usados em showSuindaCardEditor.
+  const toolbarSlot = document.getElementById("browserCardToolbarSlot");
+  if (toolbarSlot && typeof buildSuindaRichToolbar === "function" && typeof setupSuindaRichToolbar === "function") {
+    toolbarSlot.innerHTML = buildSuindaRichToolbar();
+    setupSuindaRichToolbar(dialog);
+  }
 
   if (hint) {
     hint.textContent = deck?.title || "Sem baralho";
   }
 
   dialog?.showModal();
-  setTimeout(() => document.getElementById("browserCardQuestion")?.focus(), 50);
+  setTimeout(() => questionEditor?.focus(), 50);
 }
 
 function closeBrowserCardEditor() {
@@ -173,8 +190,14 @@ async function saveBrowserCard(decks) {
   if (!browserCurrentCard) return;
 
   const deckId = Number(document.getElementById("browserCardDeck")?.value || browserCurrentCard.deckId);
-  const question = document.getElementById("browserCardQuestion")?.value.trim() || "";
-  const answer = document.getElementById("browserCardAnswer")?.value.trim() || "";
+  const questionHtml = sanitizeCardHtml(
+    document.getElementById("browserCardQuestion")?.innerHTML || ""
+  );
+  const answerHtml = sanitizeCardHtml(
+    document.getElementById("browserCardAnswer")?.innerHTML || ""
+  );
+  const question = htmlToPlainText(questionHtml);
+  const answer = htmlToPlainText(answerHtml);
   const cardType = document.getElementById("browserCardType")?.value || "basic";
 
   if (!deckId || !question || !answer) {
@@ -187,8 +210,8 @@ async function saveBrowserCard(decks) {
     deckId,
     question,
     answer,
-    questionHtml: null,
-    answerHtml: null,
+    questionHtml: questionHtml || null,
+    answerHtml: answerHtml || null,
     cardType
   };
 
@@ -232,13 +255,22 @@ function getBrowserEditorDraft() {
   const deckId = Number(document.getElementById("browserCardDeck")?.value || browserCurrentCard.deckId);
   const deck = browserDecksCache.find(item => Number(item.id) === deckId);
 
+  const questionHtml = sanitizeCardHtml(
+    document.getElementById("browserCardQuestion")?.innerHTML || ""
+  );
+  const answerHtml = sanitizeCardHtml(
+    document.getElementById("browserCardAnswer")?.innerHTML || ""
+  );
+
   return {
     ...browserCurrentCard,
     deckId,
     deckTitle: deck?.title || "Sem baralho",
     cardType: document.getElementById("browserCardType")?.value || browserCurrentCard.cardType || "basic",
-    question: document.getElementById("browserCardQuestion")?.value.trim() || "",
-    answer: document.getElementById("browserCardAnswer")?.value.trim() || "",
+    question: htmlToPlainText(questionHtml),
+    answer: htmlToPlainText(answerHtml),
+    questionHtml: questionHtml || null,
+    answerHtml: answerHtml || null,
     imageData: browserCurrentCard.imageData || null,
     audioData: browserCurrentCard.audioData || null,
     occlusionMasks: browserCurrentCard.occlusionMasks || []
@@ -366,11 +398,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("browserPreviewAudioBtn")?.addEventListener("click", playBrowserPreviewAudio);
   document.getElementById("browserCardPreviewBtn")?.addEventListener("click", () => {
     if (!browserCurrentCard) return;
-    const question = document.getElementById("browserCardQuestion")?.value.trim() || "";
-    const answer = document.getElementById("browserCardAnswer")?.value.trim() || "";
+    const questionHtml = sanitizeCardHtml(
+      document.getElementById("browserCardQuestion")?.innerHTML || ""
+    );
+    const answerHtml = sanitizeCardHtml(
+      document.getElementById("browserCardAnswer")?.innerHTML || ""
+    );
     showSuindaConfirm({
       title: "Pre-visualização",
-      message: `${question}\n\n---\n\n${answer}`,
+      message: `${htmlToPlainText(questionHtml)}\n\n---\n\n${htmlToPlainText(answerHtml)}`,
       confirmText: "Fechar",
       cancelText: "",
     });
