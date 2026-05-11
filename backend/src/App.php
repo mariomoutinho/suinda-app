@@ -807,15 +807,21 @@ SQL);
         $updateExisting = $this->db->prepare(
             'UPDATE cards SET question = ?, answer = ?, question_html = ?, answer_html = ?, card_type = ?, image_data = ?, audio_data = ?, occlusion_masks = ? WHERE id = ?'
         );
-        $existingCards = $this->db->prepare('SELECT id, question FROM cards WHERE deck_id = ? AND active = 1');
+        $existingCards = $this->db->prepare('SELECT id, question, answer FROM cards WHERE deck_id = ? AND active = 1');
         $existingCards->execute([$deckId]);
         $existingByQuestion = [];
 
         foreach ($existingCards->fetchAll() as $existingCard) {
-            $existingByQuestion[(string) $existingCard['question']] = (int) $existingCard['id'];
+            $key = (string) $existingCard['question'] . '|' . substr((string) $existingCard['answer'], 0, 120);
+            $existingByQuestion[$key] = (int) $existingCard['id'];
         }
 
         $this->db->beginTransaction();
+
+        $totalNotes = count($notes);
+        $skipped = 0;
+        $mediaInlined = 0;
+        $skippedReasons = [];
 
         try {
             foreach ($notes as $note) {
@@ -823,6 +829,13 @@ SQL);
                 $rendered = $this->renderAnkiNote($note, $fields, $models);
                 $frontHtml = $rendered['front'] ?: (string) ($fields[0] ?? '');
                 $backHtml = $rendered['back'] ?: (string) ($fields[1] ?? '');
+
+                $inlinedFront = $this->inlineAnkiMediaInHtml($frontHtml, $mediaIndex);
+                $inlinedBack = $this->inlineAnkiMediaInHtml($backHtml, $mediaIndex);
+                $frontHtml = $inlinedFront['html'];
+                $backHtml = $inlinedBack['html'];
+                $mediaInlined += $inlinedFront['inlined'] + $inlinedBack['inlined'];
+
                 $question = $this->ankiHtmlToText($frontHtml);
                 $answer = $this->ankiHtmlToText($backHtml);
                 $questionHtml = $this->sanitizeAnkiHtml($frontHtml);
@@ -832,6 +845,10 @@ SQL);
                 $audioData = $this->extractAnkiMediaData($mediaHtml, $mediaIndex, 'audio');
                 $cardType = 'basic';
                 $occlusionMasks = null;
+
+                $modelName = (string) ($models[(string) ($note['mid'] ?? '')]['name'] ?? '');
+                $looksLikeOcclusion = stripos($modelName, 'occlusion') !== false
+                    || stripos($modelName, 'oclus') !== false;
 
                 $occlusion = $this->extractAnkiImageOcclusion($fields, $mediaIndex);
                 if ($occlusion) {
@@ -847,19 +864,40 @@ SQL);
                         $questionHtml = htmlspecialchars($label, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
                         $answerHtml = $questionHtml;
                     }
+                } elseif ($looksLikeOcclusion) {
+                    // Newer Anki built-in image occlusion: model name contains "Occlusion" but the
+                    // legacy SVG-based extractor returns null. Import the card preserving raw fields
+                    // so it is not silently dropped; rendering of masks comes in a follow-up change.
+                    $cardType = 'image_occlusion';
                 }
 
-                if ($question === '' || $answer === '') {
+                $hasVisualContent = ($questionHtml !== null) || ($answerHtml !== null)
+                    || ($imageData !== null) || ($audioData !== null)
+                    || ($occlusionMasks !== null && $occlusionMasks !== []);
+
+                if ($question === '' && $answer === '' && !$hasVisualContent) {
+                    $skipped++;
+                    $skippedReasons['empty_card'] = ($skippedReasons['empty_card'] ?? 0) + 1;
                     continue;
                 }
 
-                $existingId = $existingByQuestion[$question] ?? null;
+                if ($question === '') {
+                    $question = $cardType === 'image_occlusion'
+                        ? '[Cartao de oclusao de imagem]'
+                        : '[Cartao com midia]';
+                }
+                if ($answer === '') {
+                    $answer = $question;
+                }
+
+                $dedupKey = $question . '|' . substr($answer, 0, 120);
+                $existingId = $existingByQuestion[$dedupKey] ?? null;
 
                 if ($existingId) {
                     $updateExisting->execute([$question, $answer, $questionHtml, $answerHtml, $cardType, $imageData, $audioData, $occlusionMasks ? json_encode($occlusionMasks) : null, $existingId]);
                 } else {
                     $stmt->execute([$deckId, $question, $answer, $questionHtml, $answerHtml, $cardType, $imageData, $audioData, $occlusionMasks ? json_encode($occlusionMasks) : null]);
-                    $existingByQuestion[$question] = (int) $this->db->lastInsertId();
+                    $existingByQuestion[$dedupKey] = (int) $this->db->lastInsertId();
                 }
 
                 $created++;
@@ -871,7 +909,14 @@ SQL);
             throw $exception;
         }
 
-        $this->json(['imported' => $created, 'deck' => $this->findDeckSummary($deckId)], 201);
+        $this->json([
+            'imported' => $created,
+            'skipped' => $skipped,
+            'totalNotes' => $totalNotes,
+            'mediaInlined' => $mediaInlined,
+            'skippedReasons' => (object) $skippedReasons,
+            'deck' => $this->findDeckSummary($deckId),
+        ], 201);
     }
 
     private function createImportedDeck(string $rawTitle): int
@@ -942,12 +987,25 @@ SQL);
 
     private function sanitizeAnkiHtml(string $html): ?string
     {
-        $html = preg_replace('/<\s*(script|style)[^>]*>.*?<\s*\/\s*\1\s*>/is', '', $html) ?? $html;
+        $html = preg_replace('/<\s*(script|style|iframe|object|embed)[^>]*>.*?<\s*\/\s*\1\s*>/is', '', $html) ?? $html;
         $html = preg_replace('/\[sound:[^\]]+\]/i', '', $html) ?? $html;
         $html = html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $html = str_replace("\xc2\xa0", ' ', $html);
-        $html = strip_tags($html, '<b><strong><i><em><u><br><div><p><span><ul><ol><li><sup><sub>');
-        $html = preg_replace('/\s+(style|class|id|onclick|onerror|onload|href|src)=("[^"]*"|\'[^\']*\'|[^\s>]+)/i', '', $html) ?? $html;
+
+        $allowed = '<b><strong><i><em><u><br><hr><div><p><span><ul><ol><li><sup><sub>'
+            . '<img><figure><figcaption>'
+            . '<table><thead><tbody><tfoot><tr><td><th>'
+            . '<h1><h2><h3><h4><h5><h6>'
+            . '<svg><g><rect><circle><ellipse><line><polyline><polygon><path><text><tspan><defs><use><image>';
+        $html = strip_tags($html, $allowed);
+
+        // Strip inline event handlers and risky attributes; keep src/alt/width/height/viewBox/xmlns/etc.
+        $html = preg_replace('/\s+on[a-z]+\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)/i', '', $html) ?? $html;
+        $html = preg_replace('/\s+(style|class|id|data-[\w-]+)\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)/i', '', $html) ?? $html;
+
+        // Neutralize javascript:/vbscript: in src and href.
+        $html = preg_replace('/\s+(src|href|xlink:href)\s*=\s*("|\')(\s*(?:javascript|vbscript|data:text\/html)[^"\']*)\2/i', ' $1=""', $html) ?? $html;
+
         $html = trim($html);
 
         return $html === '' ? null : $html;
@@ -1277,6 +1335,52 @@ SQL);
         }
 
         return $index;
+    }
+
+    /**
+     * Replace <img src="filename"> references with inline data URLs resolved from the Anki media index.
+     * Returns ['html' => string, 'inlined' => int].
+     */
+    private function inlineAnkiMediaInHtml(string $html, array $mediaIndex): array
+    {
+        if ($html === '') {
+            return ['html' => $html, 'inlined' => 0];
+        }
+
+        $inlined = 0;
+        $cache = [];
+
+        $resolve = function (string $name) use ($mediaIndex, &$cache): ?string {
+            $key = $this->normalizeAnkiMediaName($name);
+            if (array_key_exists($key, $cache)) {
+                return $cache[$key];
+            }
+            $path = $this->resolveAnkiMediaPath($name, $mediaIndex);
+            if (!$path) {
+                return $cache[$key] = null;
+            }
+            $mime = mime_content_type($path) ?: $this->guessMediaMime($name, 'image');
+            return $cache[$key] = 'data:' . $mime . ';base64,' . base64_encode((string) file_get_contents($path));
+        };
+
+        $html = preg_replace_callback(
+            '/<img\b([^>]*?)\bsrc\s*=\s*(["\'])([^"\']+)\2([^>]*)>/i',
+            function (array $match) use ($resolve, &$inlined): string {
+                $src = html_entity_decode($match[3], ENT_QUOTES | ENT_HTML5, 'UTF-8');
+                if (preg_match('#^(data|https?):#i', $src)) {
+                    return $match[0];
+                }
+                $dataUrl = $resolve($src);
+                if (!$dataUrl) {
+                    return $match[0];
+                }
+                $inlined++;
+                return '<img' . $match[1] . 'src="' . $dataUrl . '"' . $match[4] . '>';
+            },
+            $html
+        ) ?? $html;
+
+        return ['html' => $html, 'inlined' => $inlined];
     }
 
     private function extractAnkiMediaData(string $html, array $mediaIndex, string $type): ?string

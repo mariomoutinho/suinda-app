@@ -707,7 +707,7 @@ async function setupDeckQuickActions() {
 
     try {
       if (file.name.toLowerCase().endsWith(".apkg")) {
-        await apiImportApkg(firstDeck?.id || 0, file, {
+        const result = await apiImportApkg(firstDeck?.id || 0, file, {
           autoCreateDeck: true,
           deckTitle: file.name.replace(/\.apkg$/i, ""),
           onProgress: info => {
@@ -719,6 +719,24 @@ async function setupDeckQuickActions() {
             progress?.update({ message: processing, percent: info.percent });
           }
         });
+
+        const imported = Number(result?.imported || 0);
+        const skipped = Number(result?.skipped || 0);
+        const totalNotes = Number(result?.totalNotes || 0);
+
+        if (imported === 0) {
+          showSuindaToast(
+            `Nenhum cartao foi importado (${totalNotes} notas no pacote, ${skipped} ignoradas). Verifique se o .apkg tem cards suportados.`,
+            "error"
+          );
+        } else {
+          const detalhe = skipped > 0 ? `, ${skipped} ignorados` : "";
+          showSuindaToast(`${imported} cartoes importados${detalhe}.`, "success");
+        }
+
+        if (skipped > 0) {
+          console.warn("Importacao .apkg: cards ignorados", result?.skippedReasons || {});
+        }
       } else {
         progress?.update({ message: "Lendo arquivo de texto...", percent: 35 });
         const content = await file.text();
