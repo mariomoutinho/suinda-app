@@ -158,6 +158,63 @@ function showSuindaPrompt({
   });
 }
 
+function showSuindaCardEditor({
+  title = "Editar cartao",
+  fields = [],
+  confirmText = "Salvar",
+  cancelText = "Cancelar"
+} = {}) {
+  return new Promise(resolve => {
+    const host = ensureSuindaDialogHost();
+
+    const fieldsMarkup = fields.map((field, index) => {
+      const id = `suindaEditorField_${index}`;
+      const rows = Number(field.rows) > 0 ? Number(field.rows) : 4;
+      return `
+        <label class="suinda-prompt-label" for="${id}">
+          ${escapeSuindaShellHtml(field.label || "")}
+          <textarea
+            id="${id}"
+            data-suinda-field-name="${escapeSuindaShellHtml(field.name || `field_${index}`)}"
+            rows="${rows}"
+            placeholder="${escapeSuindaShellHtml(field.placeholder || "")}"
+          >${escapeSuindaShellHtml(field.value ?? "")}</textarea>
+        </label>
+      `;
+    }).join("");
+
+    host.innerHTML = `
+      <dialog class="suinda-modal suinda-modal-editor" aria-label="${escapeSuindaShellHtml(title)}">
+        <form method="dialog" class="suinda-modal-card">
+          <h2>${escapeSuindaShellHtml(title)}</h2>
+          ${fieldsMarkup}
+          <div class="suinda-modal-actions">
+            <button class="suinda-modal-secondary" data-suinda-cancel type="button">${escapeSuindaShellHtml(cancelText)}</button>
+            <button class="suinda-modal-primary" data-suinda-confirm type="button">${escapeSuindaShellHtml(confirmText)}</button>
+          </div>
+        </form>
+      </dialog>
+    `;
+
+    const dialog = host.querySelector(".suinda-modal");
+    dialog.__suindaResolve = resolve;
+    dialog.addEventListener("cancel", event => {
+      event.preventDefault();
+      closeSuindaDialog(null);
+    });
+    host.querySelector("[data-suinda-cancel]")?.addEventListener("click", () => closeSuindaDialog(null));
+    host.querySelector("[data-suinda-confirm]")?.addEventListener("click", () => {
+      const result = {};
+      host.querySelectorAll("[data-suinda-field-name]").forEach(node => {
+        result[node.dataset.suindaFieldName] = node.value;
+      });
+      closeSuindaDialog(result);
+    });
+    dialog.showModal();
+    setTimeout(() => host.querySelector("[data-suinda-field-name]")?.focus(), 60);
+  });
+}
+
 function showSuindaToast(message, type = "info") {
   let toast = document.getElementById("suindaToast");
 

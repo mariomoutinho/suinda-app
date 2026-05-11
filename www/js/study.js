@@ -395,28 +395,41 @@ async function startStudyPage() {
   async function editCurrentNote() {
     if (!state.currentCard) return;
 
-    const question = await showSuindaPrompt({
-      title: "Editar frente",
-      label: "Frente do cartao",
-      value: state.currentCard.question || "",
-      multiline: true
+    const result = await showSuindaCardEditor({
+      title: "Editar nota",
+      fields: [
+        {
+          name: "question",
+          label: "Frente do cartao",
+          value: state.currentCard.question || "",
+          rows: 4
+        },
+        {
+          name: "answer",
+          label: "Verso do cartao",
+          value: state.currentCard.answer || "",
+          rows: 4
+        }
+      ]
     });
-    if (question === null) return;
 
-    const answer = await showSuindaPrompt({
-      title: "Editar verso",
-      label: "Verso do cartao",
-      value: state.currentCard.answer || "",
-      multiline: true
-    });
-    if (answer === null) return;
+    if (!result) return;
+
+    const nextQuestion = String(result.question ?? "").trim();
+    const nextAnswer = String(result.answer ?? "").trim();
+
+    if (nextQuestion === (state.currentCard.question || "").trim() &&
+        nextAnswer === (state.currentCard.answer || "").trim()) {
+      return;
+    }
 
     await persistCurrentCard({
-      question: question.trim(),
-      answer: answer.trim(),
+      question: nextQuestion,
+      answer: nextAnswer,
       questionHtml: null,
       answerHtml: null
     });
+    showSuindaToast("Nota atualizada.");
   }
 
   async function editCurrentTags() {
