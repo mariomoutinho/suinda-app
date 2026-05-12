@@ -1604,7 +1604,8 @@
 }
 
 .dialog-actions button,
-.dialog-topbar button {
+.dialog-topbar > button,
+.dialog-topbar > .app-actions > button {
   border: 0;
   background: transparent;
   color: var(--primary);
@@ -1638,7 +1639,8 @@
   font-size: 24px;
 }
 
-.dialog-topbar button {
+.dialog-topbar > button,
+.dialog-topbar > .app-actions > button {
   font-size: 30px;
 }
 
@@ -1960,6 +1962,23 @@
   background: rgba(31, 77, 92, 0.08);
 }
 
+.browser-show-more {
+  width: calc(100% - 28px);
+  margin: 12px 14px 24px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--primary);
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.browser-show-more:active {
+  background: rgba(31, 77, 92, 0.08);
+}
+
 .browser-table-head span {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -1981,35 +2000,56 @@
 
 .card-editor-form {
   min-height: 100dvh;
-  padding-bottom: 24px;
-}
-
-.dialog-topbar {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
+  display: flex;
+  flex-direction: column;
+  padding: 0 0 calc(24px + env(safe-area-inset-bottom));
   gap: 12px;
-  align-items: center;
-  padding: 16px 18px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
 }
 
-.dialog-topbar h2 {
+.card-editor-dialog .dialog-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  grid-template-columns: 44px 1fr auto;
+  padding: 12px 16px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.card-editor-dialog .dialog-topbar h2 {
   margin: 0;
-  font-size: 24px;
-  line-height: 1.1;
+  font-size: 18px;
+  line-height: 1.2;
+  font-weight: 700;
+}
+
+.card-editor-dialog .dialog-topbar .muted-line {
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.2;
 }
 
 .editor-row,
 .editor-field {
   display: grid;
-  gap: 8px;
-  padding: 16px 24px;
+  gap: 6px;
+  padding: 0 20px;
 }
 
 .editor-row {
-  grid-template-columns: 72px minmax(0, 1fr);
+  grid-template-columns: 80px minmax(0, 1fr);
   align-items: center;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.editor-row strong {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-soft, #6b7280);
 }
 
 .editor-row select,
@@ -2018,10 +2058,22 @@
   border: 0;
   border-bottom: 2px solid var(--border);
   border-radius: 0;
-  padding: 10px 2px;
+  padding: 8px 2px;
   background: transparent;
   color: var(--text);
   font: inherit;
+  font-size: 14px;
+}
+
+.editor-row select:focus,
+.editor-field textarea:focus {
+  outline: none;
+  border-bottom-color: var(--primary);
+}
+
+.editor-field {
+  padding-top: 8px;
+  padding-bottom: 0;
 }
 
 .editor-field textarea {
@@ -2029,9 +2081,136 @@
   resize: vertical;
 }
 
-.editor-field span {
+.editor-field > .suinda-rich-field-label,
+.editor-field > span {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-soft, #6b7280);
+}
+
+/* Toolbar do editor dentro do dialog: ancorada visualmente abaixo da meta
+   do card e acima dos campos Frente/Verso. Reduz a sensacao de "bloco solto". */
+.card-editor-dialog #browserCardToolbarSlot {
+  padding: 0 20px;
+}
+
+.card-editor-dialog #browserCardToolbarSlot .suinda-editor-toolbar {
+  margin: 4px 0 0;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 1px 0 rgba(31, 77, 92, 0.04);
+  position: sticky;
+  top: 64px;
+  z-index: 4;
+}
+
+.card-editor-dialog .suinda-rich-editor {
+  min-height: 120px;
+  max-height: 50vh;
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 15px;
+}
+
+@media (min-width: 520px) {
+  .editor-row {
+    grid-template-columns: 90px minmax(0, 1fr);
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+  .editor-field {
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+  .card-editor-dialog #browserCardToolbarSlot {
+    padding: 0 24px;
+  }
+}
+
+@media (max-width: 360px) {
+  .editor-row {
+    grid-template-columns: 64px minmax(0, 1fr);
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  .editor-field {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  .card-editor-dialog #browserCardToolbarSlot {
+    padding: 0 14px;
+  }
+}
+
+/* Painel de visualizacao para notas de oclusao no editor do navegador. */
+.occlusion-view-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 8px 24px 24px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.occlusion-view-panel.hidden {
+  display: none;
+}
+
+.occlusion-view-header h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 700;
   color: var(--text);
-  font-weight: 600;
+}
+
+.occlusion-view-hint {
+  padding: 0;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.occlusion-view-section h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--primary);
+}
+
+.occlusion-view-frame {
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+.occlusion-view-frame img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.occlusion-view-rendered {
+  padding: 10px 12px;
+  background: rgba(31, 77, 92, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.occlusion-view-rendered img,
+.occlusion-view-rendered video,
+.occlusion-view-rendered audio {
+  max-width: 100%;
 }
 
 .card-preview-dialog {

@@ -573,9 +573,15 @@ SQL);
     private function listCards(int $deckId): void
     {
         $includeMedia = ($_GET['includeMedia'] ?? '1') !== '0';
+        // Em modo "lista" (includeMedia=0) descartamos as colunas pesadas que
+        // nao sao necessarias para popular a tabela do Card Browser nem para
+        // o primeiro render da tela de estudo:
+        //  - image_data / audio_data: ja eram excluidas;
+        //  - occlusion_masks: JSON potencialmente grande em decks de oclusao;
+        // O fetch completo (apiGetCard) continua retornando todas as colunas.
         $columns = $includeMedia
             ? '*'
-            : 'id, deck_id, question, answer, question_html, answer_html, card_type, occlusion_masks';
+            : 'id, deck_id, question, answer, question_html, answer_html, card_type';
         $stmt = $this->db->prepare('SELECT ' . $columns . ' FROM cards WHERE deck_id = ? AND active = 1 ORDER BY id');
         $stmt->execute([$deckId]);
 

@@ -86,9 +86,38 @@ async function startStudyPage() {
     ? getDeckScopeDeckIds(deckId)
     : [deckId];
 
+  // Estrategia de carregamento progressivo:
+  // 1) Aguardamos APENAS o deck escolhido (deckId). Assim que ele chega,
+  //    podemos renderizar o primeiro card disponivel.
+  // 2) Os sub-decks (quando houver) continuam carregando em background.
+  //    A funcao loadNextCard usa mockCards, que e re-populado conforme cada
+  //    sub-deck retorna - novos cards entram no pool automaticamente.
+  //
+  // Para decks "folha" (sem sub-decks), isso e equivalente ao Promise.all
+  // anterior. Para decks pais (Anatomia raiz com sub-decks), corta o tempo
+  // de espera ate o primeiro frame de max(N) para apenas o deck principal.
   console.time("study-fetch-cards");
-  await Promise.all(scopeDeckIds.map(scopedDeckId => loadCardsFromApi(scopedDeckId, { includeMedia: false })));
+  const subDeckIds = scopeDeckIds.filter(id => Number(id) !== Number(deckId));
+  await loadCardsFromApi(deckId, { includeMedia: false }).catch(error => {
+    console.warn("Falha ao carregar cards do deck principal.", error);
+  });
   console.timeEnd("study-fetch-cards");
+
+  // Continua carregando sub-decks em background, fire-and-forget. Quando
+  // todos retornam, tenta um loadNextCard caso o deck principal estivesse
+  // vazio (parent deck sem cards diretos, so com sub-decks).
+  if (subDeckIds.length > 0) {
+    Promise.allSettled(subDeckIds.map(id => loadCardsFromApi(id, { includeMedia: false })))
+      .then(() => {
+        try {
+          if (!state.currentCard && typeof loadNextCard === "function") {
+            loadNextCard();
+          }
+        } catch (error) {
+          console.warn("Falha ao reavaliar cards apos sub-decks.", error);
+        }
+      });
+  }
 
   const decks = mockDecks;
   const deck = decks.find(item => Number(item.id) === Number(deckId)) ||
