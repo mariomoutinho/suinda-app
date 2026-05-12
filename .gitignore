@@ -23,6 +23,7 @@ backend/database/*.db
 # Config local sensível
 .env
 .env.local
+.env.*
 
 # Sistema operacional
 .DS_Store
@@ -34,6 +35,11 @@ Thumbs.db
 
 # Logs
 *.log
+storage/logs/
+
+# Builds
+dist/
+build/
 
 # Temporários
 tmp/
