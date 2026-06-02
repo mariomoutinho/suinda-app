@@ -89,6 +89,18 @@ final class App
                 return;
             }
 
+            // ---- Curso ENEM (banco de questões) — exige matrícula no curso ----
+            if (str_starts_with($path, '/enem/')) {
+                if ($method === 'GET' && $path === '/enem/overview') { $this->enemOverview(); return; }
+                if ($method === 'GET' && $path === '/enem/taxonomy') { $this->enemTaxonomy(); return; }
+                if ($method === 'GET' && $path === '/enem/questions') { $this->enemQuestions(); return; }
+                if ($method === 'GET' && preg_match('#^/enem/questions/(\d+)$#', $path, $m)) { $this->enemShowQuestion((int) $m[1]); return; }
+                if ($method === 'POST' && preg_match('#^/enem/questions/(\d+)/answer$#', $path, $m)) { $this->enemAnswer((int) $m[1]); return; }
+
+                $this->json(['error' => 'Rota ENEM nao encontrada.'], 404);
+                return;
+            }
+
             if ($method === 'GET' && $path === '/decks') {
                 $this->listDecks();
                 return;
@@ -427,6 +439,8 @@ SQL);
         // pessoais (que so ele ve), enquanto os baralhos institucionais
         // (owner_id NULL) ficam restritos as matriculas.
         $this->addColumnIfMissing('decks', 'owner_id', 'INTEGER');
+
+        $this->migrateEnem();
     }
 
     private function migrateMysql(): void
@@ -459,6 +473,368 @@ SQL);
         }
 
         $this->addColumnIfMissing('decks', 'owner_id', 'INT NULL');
+
+        $this->migrateEnem();
+    }
+
+    /**
+     * Camada ENEM (banco de questoes e taxonomia da Matriz de Referencia).
+     * Aditiva e idempotente; nao toca nas tabelas existentes.
+     */
+    private function migrateEnem(): void
+    {
+        if (($this->config['database_driver'] ?? 'sqlite') === 'mysql') {
+            foreach ($this->enemMysqlSchema() as $statement) {
+                $this->db->exec($statement);
+            }
+            return;
+        }
+
+        $this->db->exec($this->enemSqliteSchema());
+    }
+
+    private function enemSqliteSchema(): string
+    {
+        return <<<SQL
+CREATE TABLE IF NOT EXISTS cognitive_axes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    description TEXT
+);
+
+CREATE TABLE IF NOT EXISTS disciplines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    area_id INTEGER,
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (area_id) REFERENCES knowledge_areas(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS contents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    area_id INTEGER,
+    discipline_id INTEGER,
+    parent_id INTEGER,
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (area_id) REFERENCES knowledge_areas(id) ON DELETE SET NULL,
+    FOREIGN KEY (discipline_id) REFERENCES disciplines(id) ON DELETE SET NULL,
+    FOREIGN KEY (parent_id) REFERENCES contents(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS competencies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    area_id INTEGER NOT NULL,
+    code TEXT NOT NULL UNIQUE,
+    number INTEGER NOT NULL,
+    statement TEXT NOT NULL,
+    FOREIGN KEY (area_id) REFERENCES knowledge_areas(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS skills (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    competency_id INTEGER NOT NULL,
+    code TEXT NOT NULL UNIQUE,
+    number INTEGER NOT NULL,
+    statement TEXT NOT NULL,
+    FOREIGN KEY (competency_id) REFERENCES competencies(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS exams (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    year INTEGER NOT NULL,
+    day INTEGER,
+    booklet TEXT,
+    color TEXT,
+    source_label TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS exam_questions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    exam_id INTEGER NOT NULL,
+    course_id INTEGER,
+    card_id INTEGER,
+    area_id INTEGER,
+    discipline_id INTEGER,
+    content_id INTEGER,
+    competency_id INTEGER,
+    skill_id INTEGER,
+    cognitive_axis_id INTEGER,
+    number INTEGER NOT NULL,
+    correct_alternative TEXT,
+    status TEXT NOT NULL DEFAULT 'pendente_revisao',
+    statement_text TEXT,
+    explanation TEXT,
+    explanation_status TEXT NOT NULL DEFAULT 'pendente',
+    confidence TEXT NOT NULL DEFAULT 'baixa',
+    review_needed INTEGER NOT NULL DEFAULT 1,
+    pdf_page INTEGER,
+    imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    notes TEXT,
+    UNIQUE (exam_id, number),
+    FOREIGN KEY (exam_id) REFERENCES exams(id) ON DELETE CASCADE,
+    FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE SET NULL,
+    FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE SET NULL,
+    FOREIGN KEY (area_id) REFERENCES knowledge_areas(id) ON DELETE SET NULL,
+    FOREIGN KEY (discipline_id) REFERENCES disciplines(id) ON DELETE SET NULL,
+    FOREIGN KEY (content_id) REFERENCES contents(id) ON DELETE SET NULL,
+    FOREIGN KEY (competency_id) REFERENCES competencies(id) ON DELETE SET NULL,
+    FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE SET NULL,
+    FOREIGN KEY (cognitive_axis_id) REFERENCES cognitive_axes(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS question_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    question_id INTEGER NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    path TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'crop',
+    pdf_page INTEGER,
+    width INTEGER,
+    height INTEGER,
+    FOREIGN KEY (question_id) REFERENCES exam_questions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS question_alternatives (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    question_id INTEGER NOT NULL,
+    letter TEXT NOT NULL,
+    body TEXT,
+    is_correct INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (question_id, letter),
+    FOREIGN KEY (question_id) REFERENCES exam_questions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS question_contents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    question_id INTEGER NOT NULL,
+    content_id INTEGER NOT NULL,
+    role TEXT NOT NULL DEFAULT 'secundario',
+    UNIQUE (question_id, content_id),
+    FOREIGN KEY (question_id) REFERENCES exam_questions(id) ON DELETE CASCADE,
+    FOREIGN KEY (content_id) REFERENCES contents(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS question_competencies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    question_id INTEGER NOT NULL,
+    competency_id INTEGER NOT NULL,
+    role TEXT NOT NULL DEFAULT 'secundario',
+    UNIQUE (question_id, competency_id),
+    FOREIGN KEY (question_id) REFERENCES exam_questions(id) ON DELETE CASCADE,
+    FOREIGN KEY (competency_id) REFERENCES competencies(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS question_skills (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    question_id INTEGER NOT NULL,
+    skill_id INTEGER NOT NULL,
+    role TEXT NOT NULL DEFAULT 'secundario',
+    UNIQUE (question_id, skill_id),
+    FOREIGN KEY (question_id) REFERENCES exam_questions(id) ON DELETE CASCADE,
+    FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS question_cognitive_axes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    question_id INTEGER NOT NULL,
+    cognitive_axis_id INTEGER NOT NULL,
+    UNIQUE (question_id, cognitive_axis_id),
+    FOREIGN KEY (question_id) REFERENCES exam_questions(id) ON DELETE CASCADE,
+    FOREIGN KEY (cognitive_axis_id) REFERENCES cognitive_axes(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS question_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    question_id INTEGER NOT NULL,
+    selected_alternative TEXT,
+    is_correct INTEGER,
+    answered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    time_spent_seconds INTEGER,
+    attempt_number INTEGER NOT NULL DEFAULT 1,
+    session_origin TEXT,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (question_id) REFERENCES exam_questions(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_eq_exam ON exam_questions(exam_id);
+CREATE INDEX IF NOT EXISTS idx_eq_discipline ON exam_questions(discipline_id);
+CREATE INDEX IF NOT EXISTS idx_eq_card ON exam_questions(card_id);
+CREATE INDEX IF NOT EXISTS idx_qa_user ON question_attempts(user_id);
+CREATE INDEX IF NOT EXISTS idx_qa_question ON question_attempts(question_id);
+SQL;
+    }
+
+    /** @return string[] DDL idempotente das tabelas ENEM para MySQL. */
+    private function enemMysqlSchema(): array
+    {
+        return [
+            "CREATE TABLE IF NOT EXISTS cognitive_axes (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                code VARCHAR(10) NOT NULL UNIQUE,
+                name VARCHAR(120) NOT NULL,
+                description TEXT
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            "CREATE TABLE IF NOT EXISTS disciplines (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                area_id INT NULL,
+                name VARCHAR(120) NOT NULL,
+                slug VARCHAR(140) NOT NULL UNIQUE,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT fk_disc_area FOREIGN KEY (area_id) REFERENCES knowledge_areas(id) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            "CREATE TABLE IF NOT EXISTS contents (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                area_id INT NULL,
+                discipline_id INT NULL,
+                parent_id INT NULL,
+                name VARCHAR(240) NOT NULL,
+                slug VARCHAR(260) NOT NULL UNIQUE,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT fk_cont_area FOREIGN KEY (area_id) REFERENCES knowledge_areas(id) ON DELETE SET NULL,
+                CONSTRAINT fk_cont_disc FOREIGN KEY (discipline_id) REFERENCES disciplines(id) ON DELETE SET NULL,
+                CONSTRAINT fk_cont_parent FOREIGN KEY (parent_id) REFERENCES contents(id) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            "CREATE TABLE IF NOT EXISTS competencies (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                area_id INT NOT NULL,
+                code VARCHAR(20) NOT NULL UNIQUE,
+                number INT NOT NULL,
+                statement TEXT NOT NULL,
+                CONSTRAINT fk_comp_area FOREIGN KEY (area_id) REFERENCES knowledge_areas(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            "CREATE TABLE IF NOT EXISTS skills (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                competency_id INT NOT NULL,
+                code VARCHAR(20) NOT NULL UNIQUE,
+                number INT NOT NULL,
+                statement TEXT NOT NULL,
+                CONSTRAINT fk_skill_comp FOREIGN KEY (competency_id) REFERENCES competencies(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            "CREATE TABLE IF NOT EXISTS exams (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                slug VARCHAR(160) NOT NULL UNIQUE,
+                name VARCHAR(200) NOT NULL,
+                year INT NOT NULL,
+                day INT NULL,
+                booklet VARCHAR(20) NULL,
+                color VARCHAR(30) NULL,
+                source_label VARCHAR(200) NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            "CREATE TABLE IF NOT EXISTS exam_questions (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                exam_id INT NOT NULL,
+                course_id INT NULL,
+                card_id INT NULL,
+                area_id INT NULL,
+                discipline_id INT NULL,
+                content_id INT NULL,
+                competency_id INT NULL,
+                skill_id INT NULL,
+                cognitive_axis_id INT NULL,
+                number INT NOT NULL,
+                correct_alternative VARCHAR(2) NULL,
+                status VARCHAR(30) NOT NULL DEFAULT 'pendente_revisao',
+                statement_text MEDIUMTEXT,
+                explanation MEDIUMTEXT,
+                explanation_status VARCHAR(30) NOT NULL DEFAULT 'pendente',
+                confidence VARCHAR(10) NOT NULL DEFAULT 'baixa',
+                review_needed TINYINT(1) NOT NULL DEFAULT 1,
+                pdf_page INT NULL,
+                imported_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                notes TEXT,
+                UNIQUE KEY unique_exam_number (exam_id, number),
+                KEY idx_eq_discipline (discipline_id),
+                KEY idx_eq_card (card_id),
+                CONSTRAINT fk_eq_exam FOREIGN KEY (exam_id) REFERENCES exams(id) ON DELETE CASCADE,
+                CONSTRAINT fk_eq_course FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE SET NULL,
+                CONSTRAINT fk_eq_card FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE SET NULL,
+                CONSTRAINT fk_eq_area FOREIGN KEY (area_id) REFERENCES knowledge_areas(id) ON DELETE SET NULL,
+                CONSTRAINT fk_eq_disc FOREIGN KEY (discipline_id) REFERENCES disciplines(id) ON DELETE SET NULL,
+                CONSTRAINT fk_eq_content FOREIGN KEY (content_id) REFERENCES contents(id) ON DELETE SET NULL,
+                CONSTRAINT fk_eq_comp FOREIGN KEY (competency_id) REFERENCES competencies(id) ON DELETE SET NULL,
+                CONSTRAINT fk_eq_skill FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE SET NULL,
+                CONSTRAINT fk_eq_axis FOREIGN KEY (cognitive_axis_id) REFERENCES cognitive_axes(id) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            "CREATE TABLE IF NOT EXISTS question_images (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                question_id INT NOT NULL,
+                position INT NOT NULL DEFAULT 0,
+                path VARCHAR(400) NOT NULL,
+                kind VARCHAR(20) NOT NULL DEFAULT 'crop',
+                pdf_page INT NULL,
+                width INT NULL,
+                height INT NULL,
+                CONSTRAINT fk_qi_question FOREIGN KEY (question_id) REFERENCES exam_questions(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            "CREATE TABLE IF NOT EXISTS question_alternatives (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                question_id INT NOT NULL,
+                letter VARCHAR(2) NOT NULL,
+                body TEXT,
+                is_correct TINYINT(1) NOT NULL DEFAULT 0,
+                UNIQUE KEY unique_question_letter (question_id, letter),
+                CONSTRAINT fk_qalt_question FOREIGN KEY (question_id) REFERENCES exam_questions(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            "CREATE TABLE IF NOT EXISTS question_contents (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                question_id INT NOT NULL,
+                content_id INT NOT NULL,
+                role VARCHAR(20) NOT NULL DEFAULT 'secundario',
+                UNIQUE KEY unique_q_content (question_id, content_id),
+                CONSTRAINT fk_qc_question FOREIGN KEY (question_id) REFERENCES exam_questions(id) ON DELETE CASCADE,
+                CONSTRAINT fk_qc_content FOREIGN KEY (content_id) REFERENCES contents(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            "CREATE TABLE IF NOT EXISTS question_competencies (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                question_id INT NOT NULL,
+                competency_id INT NOT NULL,
+                role VARCHAR(20) NOT NULL DEFAULT 'secundario',
+                UNIQUE KEY unique_q_comp (question_id, competency_id),
+                CONSTRAINT fk_qcomp_question FOREIGN KEY (question_id) REFERENCES exam_questions(id) ON DELETE CASCADE,
+                CONSTRAINT fk_qcomp_comp FOREIGN KEY (competency_id) REFERENCES competencies(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            "CREATE TABLE IF NOT EXISTS question_skills (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                question_id INT NOT NULL,
+                skill_id INT NOT NULL,
+                role VARCHAR(20) NOT NULL DEFAULT 'secundario',
+                UNIQUE KEY unique_q_skill (question_id, skill_id),
+                CONSTRAINT fk_qskill_question FOREIGN KEY (question_id) REFERENCES exam_questions(id) ON DELETE CASCADE,
+                CONSTRAINT fk_qskill_skill FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            "CREATE TABLE IF NOT EXISTS question_cognitive_axes (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                question_id INT NOT NULL,
+                cognitive_axis_id INT NOT NULL,
+                UNIQUE KEY unique_q_axis (question_id, cognitive_axis_id),
+                CONSTRAINT fk_qax_question FOREIGN KEY (question_id) REFERENCES exam_questions(id) ON DELETE CASCADE,
+                CONSTRAINT fk_qax_axis FOREIGN KEY (cognitive_axis_id) REFERENCES cognitive_axes(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            "CREATE TABLE IF NOT EXISTS question_attempts (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                question_id INT NOT NULL,
+                selected_alternative VARCHAR(2) NULL,
+                is_correct TINYINT(1) NULL,
+                answered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                time_spent_seconds INT NULL,
+                attempt_number INT NOT NULL DEFAULT 1,
+                session_origin VARCHAR(40) NULL,
+                KEY idx_qa_user (user_id),
+                KEY idx_qa_question (question_id),
+                CONSTRAINT fk_qatt_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                CONSTRAINT fk_qatt_question FOREIGN KEY (question_id) REFERENCES exam_questions(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+        ];
     }
 
     /** @return string[] DDL idempotente das tabelas educacionais para MySQL. */
@@ -3110,6 +3486,284 @@ SQL);
         $stmt->execute($params);
 
         return $stmt;
+    }
+
+    // ============================ Curso ENEM ============================
+
+    /**
+     * Fragmento SQL que restringe a cards ENEM acessíveis ao usuário (matrícula).
+     * @return array{0:string,1:array} [sql, params]
+     */
+    private function enemAccessFilter(string $cardAlias = 'c'): array
+    {
+        $allowed = $this->allowedDeckIds(); // null = admin (tudo)
+        $sql = " AND {$cardAlias}.card_type = 'enem'";
+        $params = [];
+        if ($allowed !== null) {
+            if ($allowed === []) {
+                return [' AND 1 = 0', []]; // sem matrícula: nada
+            }
+            $placeholders = implode(',', array_fill(0, count($allowed), '?'));
+            $sql .= " AND {$cardAlias}.deck_id IN ($placeholders)";
+            $params = $allowed;
+        }
+        return [$sql, $params];
+    }
+
+    /** Linha da questão + deck do card (para gating); null se inexistente. */
+    private function enemQuestionRow(int $id): ?array
+    {
+        $stmt = $this->db->prepare(
+            'SELECT eq.*, c.deck_id AS deck_id, c.card_type AS card_type,
+                    d.name AS discipline, d.slug AS discipline_slug,
+                    a.name AS area, a.slug AS area_slug,
+                    ct.name AS content_name,
+                    comp.code AS competency_code, comp.statement AS competency_statement,
+                    sk.code AS skill_code, sk.statement AS skill_statement,
+                    ex.name AS exam_name, ex.slug AS exam_slug
+             FROM exam_questions eq
+             INNER JOIN cards c ON c.id = eq.card_id
+             LEFT JOIN disciplines d ON d.id = eq.discipline_id
+             LEFT JOIN knowledge_areas a ON a.id = eq.area_id
+             LEFT JOIN contents ct ON ct.id = eq.content_id
+             LEFT JOIN competencies comp ON comp.id = eq.competency_id
+             LEFT JOIN skills sk ON sk.id = eq.skill_id
+             LEFT JOIN exams ex ON ex.id = eq.exam_id
+             WHERE eq.id = ? LIMIT 1'
+        );
+        $stmt->execute([$id]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    private function enemImages(int $questionId): array
+    {
+        $stmt = $this->db->prepare('SELECT position, path, kind, pdf_page FROM question_images WHERE question_id = ? ORDER BY position');
+        $stmt->execute([$questionId]);
+        return array_map(fn ($r) => [
+            'position' => (int) $r['position'], 'path' => $r['path'], 'kind' => $r['kind'],
+        ], $stmt->fetchAll());
+    }
+
+    private function enemOverview(): void
+    {
+        $userId = (int) ($this->currentUser['id'] ?? 0);
+        [$acc, $accParams] = $this->enemAccessFilter('c');
+        $base = 'FROM exam_questions eq INNER JOIN cards c ON c.id = eq.card_id WHERE 1 = 1' . $acc;
+
+        $totalActive = (int) $this->prepared("SELECT COUNT(*) {$base} AND eq.status = 'ativa'", $accParams)->fetchColumn();
+        $totalAll = (int) $this->prepared("SELECT COUNT(*) {$base}", $accParams)->fetchColumn();
+        $annulled = (int) $this->prepared("SELECT COUNT(*) {$base} AND eq.status = 'anulada'", $accParams)->fetchColumn();
+
+        $byDisc = $this->prepared(
+            "SELECT d.name AS discipline, COUNT(*) AS total
+             FROM exam_questions eq INNER JOIN cards c ON c.id = eq.card_id
+             LEFT JOIN disciplines d ON d.id = eq.discipline_id
+             WHERE eq.status = 'ativa'{$acc} GROUP BY d.name ORDER BY d.name",
+            $accParams
+        )->fetchAll();
+
+        $attBase = "FROM question_attempts qa INNER JOIN exam_questions eq ON eq.id = qa.question_id INNER JOIN cards c ON c.id = eq.card_id WHERE qa.user_id = ? AND eq.status = 'ativa'{$acc}";
+        $aParams = array_merge([$userId], $accParams);
+        $attempts = (int) $this->prepared("SELECT COUNT(*) {$attBase}", $aParams)->fetchColumn();
+        $correctAttempts = (int) $this->prepared("SELECT COALESCE(SUM(qa.is_correct), 0) {$attBase}", $aParams)->fetchColumn();
+        $answered = (int) $this->prepared("SELECT COUNT(DISTINCT qa.question_id) {$attBase}", $aParams)->fetchColumn();
+
+        $now = (new DateTimeImmutable('now'))->format('c');
+        $studied = (int) $this->prepared(
+            "SELECT COUNT(*) FROM exam_questions eq INNER JOIN cards c ON c.id = eq.card_id
+             INNER JOIN card_progress cp ON cp.card_id = c.id AND cp.user_id = ? AND cp.state <> 'new'
+             WHERE eq.status = 'ativa'{$acc}",
+            array_merge([$userId], $accParams)
+        )->fetchColumn();
+        $due = (int) $this->prepared(
+            "SELECT COUNT(*) FROM exam_questions eq INNER JOIN cards c ON c.id = eq.card_id
+             INNER JOIN card_progress cp ON cp.card_id = c.id AND cp.user_id = ?
+             WHERE eq.status = 'ativa' AND cp.state <> 'new' AND cp.due_at IS NOT NULL AND cp.due_at <= ?{$acc}",
+            array_merge([$userId, $now], $accParams)
+        )->fetchColumn();
+
+        $course = $this->prepared("SELECT id, title, slug, description FROM courses WHERE slug = 'preparatorio-enem' LIMIT 1", [])->fetch() ?: null;
+        $accuracy = $attempts > 0 ? (int) round(($correctAttempts / $attempts) * 100) : 0;
+
+        $this->json([
+            'course' => $course ? $this->rowsInt([$course], ['id'])[0] : null,
+            'hasContent' => $totalAll > 0,
+            'totals' => [
+                'questions' => $totalActive, 'annulled' => $annulled,
+                'newCards' => max(0, $totalActive - $studied), 'dueCards' => $due,
+                'answered' => $answered, 'attempts' => $attempts,
+                'correctAttempts' => $correctAttempts, 'accuracy' => $accuracy,
+            ],
+            'byDiscipline' => array_map(fn ($r) => ['discipline' => $r['discipline'], 'total' => (int) $r['total']], $byDisc),
+        ]);
+    }
+
+    private function enemTaxonomy(): void
+    {
+        $this->json([
+            'areas' => $this->rowsInt($this->db->query("SELECT id, name, slug FROM knowledge_areas WHERE slug LIKE 'enem-%' ORDER BY name")->fetchAll(), ['id']),
+            'disciplines' => $this->rowsInt($this->db->query('SELECT id, area_id, name, slug FROM disciplines ORDER BY name')->fetchAll(), ['id', 'area_id']),
+            'contents' => $this->rowsInt($this->db->query('SELECT id, area_id, discipline_id, name FROM contents ORDER BY name')->fetchAll(), ['id', 'area_id', 'discipline_id']),
+            'competencies' => $this->rowsInt($this->db->query('SELECT id, area_id, code, number, statement FROM competencies ORDER BY area_id, number')->fetchAll(), ['id', 'area_id', 'number']),
+            'skills' => $this->rowsInt($this->db->query('SELECT id, competency_id, code, number, statement FROM skills ORDER BY competency_id, number')->fetchAll(), ['id', 'competency_id', 'number']),
+        ]);
+    }
+
+    private function enemQuestions(): void
+    {
+        $userId = (int) ($this->currentUser['id'] ?? 0);
+        [$acc, $accParams] = $this->enemAccessFilter('c');
+        $g = $_GET;
+
+        $where = '';
+        $wp = [];
+        $status = (string) ($g['status'] ?? 'ativa');
+        if ($status === 'ativa') { $where .= " AND eq.status = 'ativa'"; }
+        elseif ($status === 'anulada') { $where .= " AND eq.status = 'anulada'"; }
+        // 'todas' => sem filtro de status
+
+        if (!empty($g['discipline'])) { $where .= ' AND d.slug = ?'; $wp[] = $g['discipline']; }
+        if (!empty($g['content'])) { $where .= ' AND eq.content_id = ?'; $wp[] = (int) $g['content']; }
+        if (!empty($g['competency'])) { $where .= ' AND comp.code = ?'; $wp[] = $g['competency']; }
+        if (!empty($g['skill'])) { $where .= ' AND sk.code = ?'; $wp[] = $g['skill']; }
+        if (!empty($g['exam'])) { $where .= ' AND ex.slug = ?'; $wp[] = $g['exam']; }
+
+        $now = (new DateTimeImmutable('now'))->format('c');
+        switch ((string) ($g['filter'] ?? '')) {
+            case 'novas':
+                $where .= " AND NOT EXISTS (SELECT 1 FROM card_progress cp WHERE cp.card_id = c.id AND cp.user_id = ? AND cp.state <> 'new')";
+                $wp[] = $userId; break;
+            case 'nao_estudadas':
+                $where .= ' AND NOT EXISTS (SELECT 1 FROM question_attempts qa WHERE qa.question_id = eq.id AND qa.user_id = ?)';
+                $wp[] = $userId; break;
+            case 'vencidas':
+            case 'pendentes':
+                $where .= " AND EXISTS (SELECT 1 FROM card_progress cp WHERE cp.card_id = c.id AND cp.user_id = ? AND cp.state <> 'new' AND cp.due_at IS NOT NULL AND cp.due_at <= ?)";
+                $wp[] = $userId; $wp[] = $now; break;
+            case 'erradas':
+                $where .= ' AND EXISTS (SELECT 1 FROM question_attempts qa WHERE qa.question_id = eq.id AND qa.user_id = ? AND qa.is_correct = 0)';
+                $wp[] = $userId; break;
+        }
+
+        $limit = max(1, min(200, (int) ($g['limit'] ?? 60)));
+        $randomFn = (($this->config['database_driver'] ?? 'sqlite') === 'mysql') ? 'RAND()' : 'RANDOM()';
+        $order = !empty($g['random']) ? $randomFn : 'eq.number';
+
+        $sql = "SELECT eq.id, eq.number, eq.status, eq.content_id, eq.card_id, eq.confidence, eq.review_needed,
+                    d.name AS discipline, d.slug AS discipline_slug, ct.name AS content,
+                    comp.code AS competency, sk.code AS skill, ex.slug AS exam,
+                    (SELECT COUNT(*) FROM question_images qi WHERE qi.question_id = eq.id) AS images,
+                    (SELECT COUNT(*) FROM question_attempts qa WHERE qa.question_id = eq.id AND qa.user_id = ?) AS attempts
+                FROM exam_questions eq
+                INNER JOIN cards c ON c.id = eq.card_id
+                LEFT JOIN disciplines d ON d.id = eq.discipline_id
+                LEFT JOIN contents ct ON ct.id = eq.content_id
+                LEFT JOIN competencies comp ON comp.id = eq.competency_id
+                LEFT JOIN skills sk ON sk.id = eq.skill_id
+                LEFT JOIN exams ex ON ex.id = eq.exam_id
+                WHERE 1 = 1{$acc}{$where}
+                ORDER BY {$order} LIMIT {$limit}";
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute(array_merge([$userId], $accParams, $wp));
+
+        $questions = array_map(fn ($r) => [
+            'id' => (int) $r['id'], 'number' => (int) $r['number'], 'status' => $r['status'],
+            'cardId' => (int) $r['card_id'], 'discipline' => $r['discipline'], 'disciplineSlug' => $r['discipline_slug'],
+            'content' => $r['content'], 'competency' => $r['competency'], 'skill' => $r['skill'], 'exam' => $r['exam'],
+            'hasImage' => ((int) $r['images']) > 0, 'attempts' => (int) $r['attempts'],
+            'reviewNeeded' => ((int) $r['review_needed']) === 1,
+        ], $stmt->fetchAll());
+
+        $this->json(['questions' => $questions, 'count' => count($questions)]);
+    }
+
+    private function enemShowQuestion(int $id): void
+    {
+        $row = $this->enemQuestionRow($id);
+        if (!$row || ($row['card_type'] ?? '') !== 'enem') {
+            $this->json(['error' => 'Questão não encontrada.'], 404);
+            return;
+        }
+        $this->requireDeckAccess((int) $row['deck_id']);
+
+        // Frente: NÃO revela a alternativa correta.
+        $alts = $this->db->prepare('SELECT letter, body FROM question_alternatives WHERE question_id = ? ORDER BY letter');
+        $alts->execute([$id]);
+
+        $this->json(['question' => [
+            'id' => (int) $row['id'], 'number' => (int) $row['number'], 'status' => $row['status'],
+            'discipline' => $row['discipline'], 'area' => $row['area'], 'content' => $row['content_name'],
+            'competency' => $row['competency_code'], 'competencyStatement' => $row['competency_statement'],
+            'skill' => $row['skill_code'], 'skillStatement' => $row['skill_statement'],
+            'exam' => $row['exam_name'], 'pdfPage' => $row['pdf_page'] !== null ? (int) $row['pdf_page'] : null,
+            'statement' => $row['statement_text'],
+            'images' => $this->enemImages($id),
+            'imagePending' => count($this->enemImages($id)) === 0,
+            'alternatives' => array_map(fn ($a) => ['letter' => $a['letter'], 'body' => $a['body']], $alts->fetchAll()),
+            'cardId' => (int) $row['card_id'],
+            'annulled' => $row['status'] === 'anulada',
+        ]]);
+    }
+
+    private function enemAnswer(int $id): void
+    {
+        $row = $this->enemQuestionRow($id);
+        if (!$row || ($row['card_type'] ?? '') !== 'enem') {
+            $this->json(['error' => 'Questão não encontrada.'], 404);
+            return;
+        }
+        $this->requireDeckAccess((int) $row['deck_id']);
+
+        $data = $this->input();
+        $selected = strtoupper(trim((string) ($data['selected'] ?? '')));
+        $timeSpent = (int) ($data['timeSpent'] ?? 0);
+        $origin = substr((string) ($data['origin'] ?? 'enem'), 0, 40);
+
+        $altStmt = $this->db->prepare('SELECT letter, body, is_correct FROM question_alternatives WHERE question_id = ? ORDER BY letter');
+        $altStmt->execute([$id]);
+        $alternatives = array_map(fn ($a) => [
+            'letter' => $a['letter'], 'body' => $a['body'], 'isCorrect' => ((int) $a['is_correct']) === 1,
+        ], $altStmt->fetchAll());
+
+        $back = [
+            'status' => $row['status'],
+            'correct' => $row['correct_alternative'],
+            'selected' => $selected ?: null,
+            'explanation' => $row['explanation'],
+            'explanationStatus' => $row['explanation_status'],
+            'alternatives' => $alternatives,
+            'discipline' => $row['discipline'], 'content' => $row['content_name'],
+            'competency' => $row['competency_code'], 'competencyStatement' => $row['competency_statement'],
+            'skill' => $row['skill_code'], 'skillStatement' => $row['skill_statement'],
+            'cardId' => (int) $row['card_id'],
+        ];
+
+        // Anulada: não registra tentativa, não conta acerto/erro.
+        if ($row['status'] === 'anulada') {
+            $back['isCorrect'] = null;
+            $back['annulled'] = true;
+            $back['message'] = 'Questão anulada no gabarito oficial. Não conta acerto nem erro.';
+            $this->json($back);
+            return;
+        }
+
+        $isCorrect = ($selected !== '' && $selected === $row['correct_alternative']) ? 1 : 0;
+        $attemptNumber = 1 + (int) $this->prepared(
+            'SELECT COUNT(*) FROM question_attempts WHERE user_id = ? AND question_id = ?',
+            [(int) $this->currentUser['id'], $id]
+        )->fetchColumn();
+
+        $this->db->prepare(
+            'INSERT INTO question_attempts (user_id, question_id, selected_alternative, is_correct, time_spent_seconds, attempt_number, session_origin)
+             VALUES (?, ?, ?, ?, ?, ?, ?)'
+        )->execute([(int) $this->currentUser['id'], $id, $selected ?: null, $isCorrect, $timeSpent ?: null, $attemptNumber, $origin]);
+
+        $back['isCorrect'] = (bool) $isCorrect;
+        $back['annulled'] = false;
+        $back['attemptNumber'] = $attemptNumber;
+        $this->json($back);
     }
 
     private function input(): array
