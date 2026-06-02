@@ -79,6 +79,8 @@ final class App
                 if ($method === 'POST' && $path === '/admin/modules') { $this->adminCreateModule(); return; }
                 if ($method === 'POST' && $path === '/admin/path-courses') { $this->adminLinkPathCourse(); return; }
                 if ($method === 'POST' && $path === '/admin/course-decks') { $this->adminLinkCourseDeck(); return; }
+                if ($method === 'PUT' && preg_match('#^/admin/courses/(\d+)$#', $path, $m)) { $this->adminUpdateCourse((int) $m[1]); return; }
+                if ($method === 'POST' && $path === '/admin/enrollments/bulk') { $this->adminBulkEnroll(); return; }
                 if ($method === 'POST' && $path === '/admin/enrollments') { $this->adminEnroll(); return; }
                 if ($method === 'DELETE' && preg_match('#^/admin/enrollments/(\d+)$#', $path, $m)) { $this->adminDelete('enrollments', (int) $m[1]); return; }
                 if ($method === 'DELETE' && preg_match('#^/admin/course-decks/(\d+)$#', $path, $m)) { $this->adminDelete('course_decks', (int) $m[1]); return; }
@@ -978,6 +980,108 @@ SQL);
             [$userId, $courseId, 'active']
         );
         $this->json(['ok' => true], 201);
+    }
+
+    /** Edita/inativa um curso. Mantém o slug estável para não quebrar referências. */
+    private function adminUpdateCourse(int $id): void
+    {
+        $current = $this->prepared(
+            'SELECT title, description, level, status, area_id, active FROM courses WHERE id = ?',
+            [$id]
+        )->fetch();
+
+        if (!$current) {
+            $this->json(['error' => 'Curso inexistente.'], 404);
+            return;
+        }
+
+        $d = $this->input();
+        $title = trim((string) ($d['title'] ?? $current['title']));
+        if ($title === '') {
+            $this->json(['error' => 'Informe o titulo do curso.'], 422);
+            return;
+        }
+
+        $description = array_key_exists('description', $d) ? (trim((string) $d['description']) ?: null) : $current['description'];
+        $level = trim((string) ($d['level'] ?? $current['level'])) ?: 'introdutorio';
+        $status = in_array(($d['status'] ?? ''), ['available', 'coming_soon'], true) ? $d['status'] : $current['status'];
+        $active = array_key_exists('active', $d) ? (int) ((bool) $d['active']) : (int) $current['active'];
+        $areaId = array_key_exists('areaId', $d)
+            ? $this->nullableFk('knowledge_areas', $d['areaId'])
+            : ($current['area_id'] !== null ? (int) $current['area_id'] : null);
+
+        $stmt = $this->db->prepare('UPDATE courses SET title = ?, description = ?, level = ?, status = ?, area_id = ?, active = ? WHERE id = ?');
+        $stmt->execute([$title, $description, $level, $status, $areaId, $active, $id]);
+        $this->json(['ok' => true, 'id' => $id]);
+    }
+
+    /** Matrícula em lote (turma): cria os estudantes ausentes e matricula todos. */
+    private function adminBulkEnroll(): void
+    {
+        $d = $this->input();
+        $courseId = (int) ($d['courseId'] ?? 0);
+        if (!$this->rowExists('courses', $courseId)) {
+            $this->json(['error' => 'Curso inexistente.'], 422);
+            return;
+        }
+
+        $defaultPassword = (string) ($d['defaultPassword'] ?? '');
+        $students = is_array($d['students'] ?? null) ? $d['students'] : [];
+        if ($students === []) {
+            $this->json(['error' => 'Nenhum estudante informado.'], 422);
+            return;
+        }
+
+        $created = 0;
+        $enrolled = 0;
+        $already = 0;
+        $errors = [];
+        $line = 0;
+
+        foreach ($students as $s) {
+            $line++;
+            $email = strtolower(trim((string) ($s['email'] ?? '')));
+            $name = trim((string) ($s['name'] ?? ''));
+            if ($name === '' && $email !== '') {
+                $name = ucfirst(explode('@', $email)[0]);
+            }
+
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                $errors[] = ['line' => $line, 'email' => $email, 'reason' => 'e-mail invalido'];
+                continue;
+            }
+
+            $userId = $this->findUserIdByEmail($email);
+            if ($userId === null) {
+                $password = (string) ($s['password'] ?? '') ?: $defaultPassword;
+                if (strlen($password) < 6) {
+                    $errors[] = ['line' => $line, 'email' => $email, 'reason' => 'aluno novo sem senha (min. 6)'];
+                    continue;
+                }
+                $ins = $this->db->prepare('INSERT INTO users (name, email, password_hash, role, active) VALUES (?, ?, ?, ?, 1)');
+                $ins->execute([$name, $email, password_hash($password, PASSWORD_DEFAULT), 'student']);
+                $userId = (int) $this->db->lastInsertId();
+                $created++;
+            }
+
+            $exists = $this->prepared('SELECT id FROM enrollments WHERE user_id = ? AND course_id = ?', [$userId, $courseId])->fetchColumn();
+            if ($exists !== false) {
+                $already++;
+                continue;
+            }
+
+            $this->db->prepare('INSERT INTO enrollments (user_id, course_id, status) VALUES (?, ?, ?)')->execute([$userId, $courseId, 'active']);
+            $enrolled++;
+        }
+
+        $this->json([
+            'ok' => true,
+            'total' => $line,
+            'created' => $created,
+            'enrolled' => $enrolled,
+            'alreadyEnrolled' => $already,
+            'errors' => $errors,
+        ], 201);
     }
 
     /** DELETE genérico para vínculos administrativos (lista branca de tabelas). */
@@ -2769,8 +2873,9 @@ SQL);
             'SELECT DISTINCT course_decks.deck_id AS id
              FROM course_decks
              INNER JOIN enrollments ON enrollments.course_id = course_decks.course_id
+             INNER JOIN courses ON courses.id = course_decks.course_id
              INNER JOIN decks ON decks.id = course_decks.deck_id
-             WHERE enrollments.user_id = ? AND enrollments.status = ? AND decks.active = 1'
+             WHERE enrollments.user_id = ? AND enrollments.status = ? AND decks.active = 1 AND courses.active = 1'
         );
         $stmt->execute([$userId, 'active']);
         $ids = array_map('intval', array_column($stmt->fetchAll(), 'id'));
