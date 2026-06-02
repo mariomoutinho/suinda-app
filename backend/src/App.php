@@ -85,6 +85,14 @@ final class App
                 if ($method === 'DELETE' && preg_match('#^/admin/enrollments/(\d+)$#', $path, $m)) { $this->adminDelete('enrollments', (int) $m[1]); return; }
                 if ($method === 'DELETE' && preg_match('#^/admin/course-decks/(\d+)$#', $path, $m)) { $this->adminDelete('course_decks', (int) $m[1]); return; }
 
+                // --- Banco de questões: edição e gestão de imagens ---
+                if ($method === 'GET' && $path === '/admin/questions') { $this->adminListQuestions(); return; }
+                if ($method === 'GET' && preg_match('#^/admin/questions/(\d+)$#', $path, $m)) { $this->adminShowQuestion((int) $m[1]); return; }
+                if ($method === 'PUT' && preg_match('#^/admin/questions/(\d+)$#', $path, $m)) { $this->adminUpdateQuestion((int) $m[1]); return; }
+                if ($method === 'POST' && preg_match('#^/admin/questions/(\d+)/images$#', $path, $m)) { $this->adminUploadImage((int) $m[1]); return; }
+                if ($method === 'PUT' && preg_match('#^/admin/question-images/(\d+)$#', $path, $m)) { $this->adminUpdateImage((int) $m[1]); return; }
+                if ($method === 'DELETE' && preg_match('#^/admin/question-images/(\d+)$#', $path, $m)) { $this->adminDeleteImage((int) $m[1]); return; }
+
                 $this->json(['error' => 'Rota administrativa nao encontrada.'], 404);
                 return;
             }
@@ -483,14 +491,26 @@ SQL);
      */
     private function migrateEnem(): void
     {
-        if (($this->config['database_driver'] ?? 'sqlite') === 'mysql') {
+        $isMysql = ($this->config['database_driver'] ?? 'sqlite') === 'mysql';
+        if ($isMysql) {
             foreach ($this->enemMysqlSchema() as $statement) {
                 $this->db->exec($statement);
             }
-            return;
+        } else {
+            $this->db->exec($this->enemSqliteSchema());
         }
 
-        $this->db->exec($this->enemSqliteSchema());
+        // Colunas de gestão de imagens (upload manual, recorte, ordem, alt) —
+        // aditivas para bancos criados antes desta versão.
+        $int = $isMysql ? 'INT' : 'INTEGER';
+        $this->addColumnIfMissing('question_images', 'is_primary', $isMysql ? 'TINYINT(1) NOT NULL DEFAULT 0' : 'INTEGER NOT NULL DEFAULT 0');
+        $this->addColumnIfMissing('question_images', 'alt_text', $isMysql ? 'VARCHAR(300)' : 'TEXT');
+        $this->addColumnIfMissing('question_images', 'mime_type', $isMysql ? 'VARCHAR(80)' : 'TEXT');
+        $this->addColumnIfMissing('question_images', 'crop_x', $int);
+        $this->addColumnIfMissing('question_images', 'crop_y', $int);
+        $this->addColumnIfMissing('question_images', 'crop_width', $int);
+        $this->addColumnIfMissing('question_images', 'crop_height', $int);
+        $this->addColumnIfMissing('question_images', 'updated_at', $isMysql ? 'VARCHAR(40)' : 'TEXT');
     }
 
     private function enemSqliteSchema(): string
@@ -1470,6 +1490,226 @@ SQL;
         $stmt = $this->db->prepare("DELETE FROM {$table} WHERE id = ?");
         $stmt->execute([$id]);
         $this->json(['ok' => true, 'deleted' => $stmt->rowCount()]);
+    }
+
+    // ===================== Banco de questões (admin) =====================
+    private function adminListQuestions(): void
+    {
+        $g = $_GET;
+        $where = '';
+        $params = [];
+        if (!empty($g['discipline'])) { $where .= ' AND d.slug = ?'; $params[] = $g['discipline']; }
+        if (!empty($g['status'])) { $where .= ' AND eq.status = ?'; $params[] = $g['status']; }
+        if (!empty($g['exam'])) { $where .= ' AND ex.slug = ?'; $params[] = $g['exam']; }
+        if (!empty($g['q'])) { $where .= ' AND (eq.number LIKE ? OR eq.statement_text LIKE ?)'; $t = '%' . $g['q'] . '%'; $params[] = $t; $params[] = $t; }
+        switch ((string) ($g['filter'] ?? '')) {
+            case 'sem_imagem': $where .= ' AND (SELECT COUNT(*) FROM question_images qi WHERE qi.question_id = eq.id) = 0'; break;
+            case 'sem_comentario': $where .= " AND (eq.explanation IS NULL OR eq.explanation = '')"; break;
+            case 'pendente_revisao': $where .= ' AND eq.review_needed = 1'; break;
+            case 'anuladas': $where .= " AND eq.status = 'anulada'"; break;
+            case 'sem_classificacao': $where .= ' AND (eq.competency_id IS NULL OR eq.skill_id IS NULL OR eq.content_id IS NULL)'; break;
+            case 'com_erro': $where .= ' AND ((SELECT COUNT(*) FROM question_images qi WHERE qi.question_id = eq.id) = 0 OR eq.review_needed = 1)'; break;
+        }
+        $limit = max(1, min(500, (int) ($g['limit'] ?? 200)));
+        $stmt = $this->db->prepare(
+            "SELECT eq.id, eq.number, eq.status, eq.correct_alternative, eq.confidence, eq.review_needed, eq.explanation_status,
+                    d.name AS discipline, ct.name AS content, comp.code AS competency, sk.code AS skill, ex.slug AS exam,
+                    (SELECT COUNT(*) FROM question_images qi WHERE qi.question_id = eq.id) AS images,
+                    CASE WHEN eq.explanation IS NULL OR eq.explanation = '' THEN 0 ELSE 1 END AS has_comment
+             FROM exam_questions eq
+             LEFT JOIN disciplines d ON d.id = eq.discipline_id
+             LEFT JOIN contents ct ON ct.id = eq.content_id
+             LEFT JOIN competencies comp ON comp.id = eq.competency_id
+             LEFT JOIN skills sk ON sk.id = eq.skill_id
+             LEFT JOIN exams ex ON ex.id = eq.exam_id
+             WHERE 1 = 1{$where} ORDER BY eq.number LIMIT {$limit}"
+        );
+        $stmt->execute($params);
+        $questions = array_map(fn ($r) => [
+            'id' => (int) $r['id'], 'number' => (int) $r['number'], 'status' => $r['status'],
+            'correct' => $r['correct_alternative'], 'confidence' => $r['confidence'],
+            'reviewNeeded' => ((int) $r['review_needed']) === 1, 'explanationStatus' => $r['explanation_status'],
+            'discipline' => $r['discipline'], 'content' => $r['content'], 'competency' => $r['competency'],
+            'skill' => $r['skill'], 'exam' => $r['exam'], 'images' => (int) $r['images'], 'hasComment' => ((int) $r['has_comment']) === 1,
+        ], $stmt->fetchAll());
+
+        $count = fn (string $cond) => (int) $this->db->query("SELECT COUNT(*) FROM exam_questions eq WHERE $cond")->fetchColumn();
+        $this->json([
+            'questions' => $questions, 'count' => count($questions),
+            'summary' => [
+                'total' => $count('1 = 1'),
+                'semImagem' => $count('(SELECT COUNT(*) FROM question_images qi WHERE qi.question_id = eq.id) = 0'),
+                'semComentario' => $count("(eq.explanation IS NULL OR eq.explanation = '')"),
+                'pendenteRevisao' => $count('eq.review_needed = 1'),
+                'anuladas' => $count("eq.status = 'anulada'"),
+                'semClassificacao' => $count('(eq.competency_id IS NULL OR eq.skill_id IS NULL OR eq.content_id IS NULL)'),
+            ],
+        ]);
+    }
+
+    private function adminShowQuestion(int $id): void
+    {
+        $row = $this->enemQuestionRow($id);
+        if (!$row) { $this->json(['error' => 'Questão não encontrada.'], 404); return; }
+
+        $alts = $this->db->prepare('SELECT letter, body, is_correct FROM question_alternatives WHERE question_id = ? ORDER BY letter');
+        $alts->execute([$id]);
+        $imgs = $this->db->prepare('SELECT id, position, path, kind, is_primary, alt_text FROM question_images WHERE question_id = ? ORDER BY position, id');
+        $imgs->execute([$id]);
+
+        $this->json(['question' => [
+            'id' => (int) $row['id'], 'number' => (int) $row['number'], 'exam' => $row['exam_name'], 'examSlug' => $row['exam_slug'],
+            'status' => $row['status'], 'correctAlternative' => $row['correct_alternative'],
+            'statement' => $row['statement_text'], 'explanation' => $row['explanation'],
+            'explanationStatus' => $row['explanation_status'], 'confidence' => $row['confidence'],
+            'reviewNeeded' => ((int) $row['review_needed']) === 1, 'notes' => $row['notes'],
+            'disciplineId' => $row['discipline_id'] !== null ? (int) $row['discipline_id'] : null,
+            'contentId' => $row['content_id'] !== null ? (int) $row['content_id'] : null,
+            'competencyId' => $row['competency_id'] !== null ? (int) $row['competency_id'] : null,
+            'skillId' => $row['skill_id'] !== null ? (int) $row['skill_id'] : null,
+            'discipline' => $row['discipline'], 'content' => $row['content_name'], 'cardId' => (int) $row['card_id'],
+            'alternatives' => array_map(fn ($a) => ['letter' => $a['letter'], 'body' => $a['body'], 'isCorrect' => ((int) $a['is_correct']) === 1], $alts->fetchAll()),
+            'images' => array_map(fn ($im) => [
+                'id' => (int) $im['id'], 'position' => (int) $im['position'], 'path' => $im['path'], 'kind' => $im['kind'],
+                'isPrimary' => ((int) $im['is_primary']) === 1, 'altText' => $im['alt_text'],
+            ], $imgs->fetchAll()),
+        ]]);
+    }
+
+    private function adminUpdateQuestion(int $id): void
+    {
+        $row = $this->enemQuestionRow($id);
+        if (!$row) { $this->json(['error' => 'Questão não encontrada.'], 404); return; }
+        $d = $this->input();
+
+        $status = in_array(($d['status'] ?? $row['status']), ['ativa', 'anulada', 'pendente_revisao', 'revisada', 'arquivada'], true) ? $d['status'] : $row['status'];
+        $correct = array_key_exists('correctAlternative', $d) ? (strtoupper(trim((string) $d['correctAlternative'])) ?: null) : $row['correct_alternative'];
+        if ($status === 'anulada') { $correct = null; }
+        if ($correct !== null && !in_array($correct, ['A', 'B', 'C', 'D', 'E'], true)) { $correct = null; }
+
+        $disciplineId = array_key_exists('disciplineId', $d) ? $this->nullableFk('disciplines', $d['disciplineId']) : ($row['discipline_id'] !== null ? (int) $row['discipline_id'] : null);
+        $areaId = $disciplineId ? (int) $this->prepared('SELECT area_id FROM disciplines WHERE id = ?', [$disciplineId])->fetchColumn() : ($row['area_id'] !== null ? (int) $row['area_id'] : null);
+
+        $fields = [
+            'status' => $status,
+            'correct_alternative' => $correct,
+            'explanation' => array_key_exists('explanation', $d) ? (trim((string) $d['explanation']) ?: null) : $row['explanation'],
+            'explanation_status' => array_key_exists('explanation', $d) ? (trim((string) $d['explanation']) !== '' ? 'revisada' : 'pendente') : $row['explanation_status'],
+            'confidence' => in_array(($d['confidence'] ?? ''), ['alta', 'media', 'baixa'], true) ? $d['confidence'] : $row['confidence'],
+            'review_needed' => array_key_exists('reviewNeeded', $d) ? (int) ((bool) $d['reviewNeeded']) : (int) $row['review_needed'],
+            'statement_text' => array_key_exists('statement', $d) ? (string) $d['statement'] : $row['statement_text'],
+            'notes' => array_key_exists('notes', $d) ? (trim((string) $d['notes']) ?: null) : $row['notes'],
+            'area_id' => $areaId,
+            'discipline_id' => $disciplineId,
+            'content_id' => array_key_exists('contentId', $d) ? $this->nullableFk('contents', $d['contentId']) : ($row['content_id'] !== null ? (int) $row['content_id'] : null),
+            'competency_id' => array_key_exists('competencyId', $d) ? $this->nullableFk('competencies', $d['competencyId']) : ($row['competency_id'] !== null ? (int) $row['competency_id'] : null),
+            'skill_id' => array_key_exists('skillId', $d) ? $this->nullableFk('skills', $d['skillId']) : ($row['skill_id'] !== null ? (int) $row['skill_id'] : null),
+        ];
+        $set = [];
+        $params = [];
+        foreach ($fields as $k => $v) { $set[] = "$k = ?"; $params[] = $v; }
+        $params[] = $id;
+        $this->db->prepare('UPDATE exam_questions SET ' . implode(', ', $set) . ' WHERE id = ?')->execute($params);
+
+        if (isset($d['alternatives']) && is_array($d['alternatives'])) {
+            foreach ($d['alternatives'] as $letter => $body) {
+                $L = strtoupper((string) $letter);
+                if (!in_array($L, ['A', 'B', 'C', 'D', 'E'], true)) { continue; }
+                $this->db->prepare('UPDATE question_alternatives SET body = ?, is_correct = ? WHERE question_id = ? AND letter = ?')
+                    ->execute([(string) $body, ($L === $correct) ? 1 : 0, $id, $L]);
+            }
+        } else {
+            $this->db->prepare('UPDATE question_alternatives SET is_correct = CASE WHEN letter = ? THEN 1 ELSE 0 END WHERE question_id = ?')->execute([$correct, $id]);
+        }
+
+        // sincroniza o verso do card (fallback do app de cards)
+        if ($row['card_id']) {
+            $expl = $fields['explanation'];
+            $e = fn (string $s): string => htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            if ($status === 'anulada') {
+                $back = '<div class="enem-a enem-a--anulada"><p><strong>⚠ Questão anulada</strong> no gabarito oficial.</p>' . ($expl ? '<p>' . $e($expl) . '</p>' : '') . '</div>';
+            } else {
+                $back = '<div class="enem-a"><p><strong>Resposta oficial:</strong> ' . $e((string) ($correct ?? '?')) . '</p>' . ($expl ? '<p>' . $e($expl) . '</p>' : '') . '</div>';
+            }
+            $this->db->prepare('UPDATE cards SET answer_html = ? WHERE id = ?')->execute([$back, (int) $row['card_id']]);
+        }
+
+        $this->json(['ok' => true, 'id' => $id]);
+    }
+
+    private function adminUploadImage(int $id): void
+    {
+        $row = $this->enemQuestionRow($id);
+        if (!$row) { $this->json(['error' => 'Questão não encontrada.'], 404); return; }
+        if (empty($_FILES['file']['tmp_name']) || !is_uploaded_file($_FILES['file']['tmp_name'])) {
+            $this->json(['error' => 'Envie um arquivo de imagem no campo "file".'], 422);
+            return;
+        }
+        $file = $_FILES['file'];
+        if (($file['size'] ?? 0) > 5 * 1024 * 1024) { $this->json(['error' => 'Imagem maior que 5 MB.'], 422); return; }
+
+        // Valida pelo CONTEÚDO real (getimagesize confirma que é imagem e dá o MIME).
+        $size = @getimagesize($file['tmp_name']);
+        $allowed = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp'];
+        $mime = $size['mime'] ?? '';
+        if (!$size || !isset($allowed[$mime])) { $this->json(['error' => 'Formato inválido. Use JPG, PNG ou WEBP.'], 422); return; }
+        $ext = $allowed[$mime];
+
+        $dir = (string) ($this->config['enem_image_dir'] ?? (__DIR__ . '/../../assets/enem/questions'));
+        $urlBase = rtrim((string) ($this->config['enem_image_url'] ?? '/suinda/assets/enem/questions'), '/');
+        if (!is_dir($dir)) { @mkdir($dir, 0775, true); }
+        if (!is_writable($dir)) { $this->json(['error' => 'Diretório de imagens não gravável no servidor.'], 500); return; }
+
+        $position = 1 + (int) $this->prepared('SELECT COALESCE(MAX(position), 0) FROM question_images WHERE question_id = ?', [$id])->fetchColumn();
+        $existing = (int) $this->prepared('SELECT COUNT(*) FROM question_images WHERE question_id = ?', [$id])->fetchColumn();
+        $base = preg_replace('/[^a-z0-9\-]/', '', strtolower((string) ($row['exam_slug'] ?? 'enem'))) ?: 'enem';
+        $fileName = sprintf('%s-q%03d-%02d-%s.%s', $base, (int) $row['number'], $position, substr(bin2hex(random_bytes(4)), 0, 6), $ext);
+        $dest = $dir . '/' . $fileName;
+        if (!move_uploaded_file($file['tmp_name'], $dest)) { $this->json(['error' => 'Falha ao salvar a imagem.'], 500); return; }
+        @chmod($dest, 0644);
+
+        $stmt = $this->db->prepare(
+            'INSERT INTO question_images (question_id, position, path, kind, is_primary, mime_type, width, height, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        );
+        $stmt->execute([$id, $position, $urlBase . '/' . $fileName, 'manual', $existing === 0 ? 1 : 0, $mime, $size[0] ?? null, $size[1] ?? null, date('c')]);
+
+        $this->json(['ok' => true, 'id' => (int) $this->db->lastInsertId(), 'path' => $urlBase . '/' . $fileName, 'position' => $position, 'isPrimary' => $existing === 0], 201);
+    }
+
+    private function adminUpdateImage(int $id): void
+    {
+        $img = $this->prepared('SELECT * FROM question_images WHERE id = ?', [$id])->fetch();
+        if (!$img) { $this->json(['error' => 'Imagem não encontrada.'], 404); return; }
+        $d = $this->input();
+        if (!empty($d['isPrimary'])) {
+            $this->db->prepare('UPDATE question_images SET is_primary = 0 WHERE question_id = ?')->execute([(int) $img['question_id']]);
+            $this->db->prepare('UPDATE question_images SET is_primary = 1 WHERE id = ?')->execute([$id]);
+        }
+        if (array_key_exists('altText', $d)) {
+            $this->db->prepare('UPDATE question_images SET alt_text = ? WHERE id = ?')->execute([trim((string) $d['altText']) ?: null, $id]);
+        }
+        if (array_key_exists('position', $d)) {
+            $this->db->prepare('UPDATE question_images SET position = ? WHERE id = ?')->execute([(int) $d['position'], $id]);
+        }
+        $this->db->prepare('UPDATE question_images SET updated_at = ? WHERE id = ?')->execute([date('c'), $id]);
+        $this->json(['ok' => true]);
+    }
+
+    private function adminDeleteImage(int $id): void
+    {
+        $img = $this->prepared('SELECT * FROM question_images WHERE id = ?', [$id])->fetch();
+        if (!$img) { $this->json(['error' => 'Imagem não encontrada.'], 404); return; }
+        $dir = realpath((string) ($this->config['enem_image_dir'] ?? ''));
+        $name = basename((string) $img['path']);
+        if ($dir && $name) {
+            $abs = realpath($dir . '/' . $name);
+            if ($abs && str_starts_with($abs, $dir)) { @unlink($abs); }
+        }
+        $this->db->prepare('DELETE FROM question_images WHERE id = ?')->execute([$id]);
+        $remaining = $this->prepared('SELECT id FROM question_images WHERE question_id = ? ORDER BY position, id LIMIT 1', [(int) $img['question_id']])->fetchColumn();
+        if ($remaining) { $this->db->prepare('UPDATE question_images SET is_primary = 1 WHERE id = ?')->execute([(int) $remaining]); }
+        $this->json(['ok' => true]);
     }
 
     private function rowsInt(array $rows, array $intKeys): array
