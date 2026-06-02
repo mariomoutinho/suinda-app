@@ -6,6 +6,9 @@ final class App
 {
     private PDO $db;
 
+    /** Usuario autenticado da requisicao atual (preenchido apos requireUser). */
+    private ?array $currentUser = null;
+
     public function __construct(private array $config)
     {
         $this->db = $this->connect();
@@ -27,6 +30,7 @@ final class App
 
         $method = $_SERVER['REQUEST_METHOD'];
         $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) ?: '/';
+        $path = $this->stripBasePath($path);
         $path = rtrim($path, '/') ?: '/';
 
         try {
@@ -41,9 +45,45 @@ final class App
             }
 
             $user = $this->requireUser();
+            $this->currentUser = $user;
 
             if ($method === 'GET' && $path === '/me') {
                 $this->json(['user' => $user]);
+                return;
+            }
+
+            if ($method === 'GET' && $path === '/me/dashboard') {
+                $this->dashboard();
+                return;
+            }
+
+            if ($method === 'GET' && $path === '/me/courses') {
+                $this->json(['courses' => $this->enrolledCourses()]);
+                return;
+            }
+
+            if ($method === 'GET' && $path === '/me/paths') {
+                $this->json(['paths' => $this->releasedPaths()]);
+                return;
+            }
+
+            // ---- Área administrativa (mini-CMS) — somente admin ----
+            if (str_starts_with($path, '/admin/')) {
+                $this->requireAdmin((string) $user['role']);
+
+                if ($method === 'GET' && $path === '/admin/overview') { $this->adminOverview(); return; }
+                if ($method === 'POST' && $path === '/admin/users') { $this->adminCreateUser(); return; }
+                if ($method === 'POST' && $path === '/admin/areas') { $this->adminCreateArea(); return; }
+                if ($method === 'POST' && $path === '/admin/courses') { $this->adminCreateCourse(); return; }
+                if ($method === 'POST' && $path === '/admin/paths') { $this->adminCreatePath(); return; }
+                if ($method === 'POST' && $path === '/admin/modules') { $this->adminCreateModule(); return; }
+                if ($method === 'POST' && $path === '/admin/path-courses') { $this->adminLinkPathCourse(); return; }
+                if ($method === 'POST' && $path === '/admin/course-decks') { $this->adminLinkCourseDeck(); return; }
+                if ($method === 'POST' && $path === '/admin/enrollments') { $this->adminEnroll(); return; }
+                if ($method === 'DELETE' && preg_match('#^/admin/enrollments/(\d+)$#', $path, $m)) { $this->adminDelete('enrollments', (int) $m[1]); return; }
+                if ($method === 'DELETE' && preg_match('#^/admin/course-decks/(\d+)$#', $path, $m)) { $this->adminDelete('course_decks', (int) $m[1]); return; }
+
+                $this->json(['error' => 'Rota administrativa nao encontrada.'], 404);
                 return;
             }
 
@@ -298,17 +338,107 @@ SQL);
         $this->addColumnIfMissing('cards', 'occlusion_masks', 'TEXT');
         $this->addColumnIfMissing('card_progress', 'introduced_at', 'TEXT');
         $this->addColumnIfMissing('card_progress', 'last_rating', 'TEXT');
+
+        // Camada educacional (Suinda): areas, trilhas, cursos, matriculas e
+        // vinculo entre cursos e baralhos. Criada de forma aditiva — nao
+        // altera as tabelas originais do app de repeticao espacada.
+        $this->db->exec(<<<SQL
+CREATE TABLE IF NOT EXISTS knowledge_areas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    description TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS learning_paths (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    area_id INTEGER,
+    title TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    description TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (area_id) REFERENCES knowledge_areas(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS courses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    area_id INTEGER,
+    title TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    description TEXT,
+    level TEXT NOT NULL DEFAULT 'introdutorio',
+    status TEXT NOT NULL DEFAULT 'available',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (area_id) REFERENCES knowledge_areas(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS learning_path_courses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    path_id INTEGER NOT NULL,
+    course_id INTEGER NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (path_id, course_id),
+    FOREIGN KEY (path_id) REFERENCES learning_paths(id) ON DELETE CASCADE,
+    FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS course_modules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    course_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS enrollments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    course_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    enrolled_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (user_id, course_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS course_decks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    course_id INTEGER NOT NULL,
+    deck_id INTEGER NOT NULL,
+    module_id INTEGER,
+    position INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (course_id, deck_id),
+    FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+    FOREIGN KEY (deck_id) REFERENCES decks(id) ON DELETE CASCADE,
+    FOREIGN KEY (module_id) REFERENCES course_modules(id) ON DELETE SET NULL
+);
+SQL);
+
+        // owner_id permite que cada estudante continue criando baralhos
+        // pessoais (que so ele ve), enquanto os baralhos institucionais
+        // (owner_id NULL) ficam restritos as matriculas.
+        $this->addColumnIfMissing('decks', 'owner_id', 'INTEGER');
     }
 
     private function migrateMysql(): void
     {
-        $schema = file_get_contents(__DIR__ . '/../database/schema.mysql.sql');
-        if ($schema === false) {
-            throw new RuntimeException('Schema MySQL nao encontrado.');
-        }
-
-        foreach (array_filter(array_map('trim', explode(';', $schema))) as $statement) {
-            $this->db->exec($statement);
+        // O arquivo .sql NAO e publicado no deploy (regra **/*.sql do FTP).
+        // Quando presente (dev local) criamos as tabelas-base a partir dele;
+        // quando ausente (servidor), assume-se que foram importadas via
+        // phpMyAdmin — as tabelas educacionais abaixo sao sempre garantidas.
+        $schemaPath = __DIR__ . '/../database/schema.mysql.sql';
+        if (is_file($schemaPath)) {
+            $schema = (string) file_get_contents($schemaPath);
+            foreach (array_filter(array_map('trim', explode(';', $schema))) as $statement) {
+                $this->db->exec($statement);
+            }
         }
 
         $this->addColumnIfMissing('cards', 'card_type', "VARCHAR(40) NOT NULL DEFAULT 'basic'");
@@ -319,6 +449,91 @@ SQL);
         $this->addColumnIfMissing('cards', 'occlusion_masks', 'LONGTEXT');
         $this->addColumnIfMissing('card_progress', 'introduced_at', 'VARCHAR(40)');
         $this->addColumnIfMissing('card_progress', 'last_rating', 'VARCHAR(30)');
+
+        // Camada educacional (Suinda) — equivalente MySQL/MariaDB das tabelas
+        // criadas no driver SQLite. Aditiva e idempotente.
+        foreach ($this->suindaMysqlSchema() as $statement) {
+            $this->db->exec($statement);
+        }
+
+        $this->addColumnIfMissing('decks', 'owner_id', 'INT NULL');
+    }
+
+    /** @return string[] DDL idempotente das tabelas educacionais para MySQL. */
+    private function suindaMysqlSchema(): array
+    {
+        return [
+            "CREATE TABLE IF NOT EXISTS knowledge_areas (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                name VARCHAR(160) NOT NULL,
+                slug VARCHAR(160) NOT NULL UNIQUE,
+                description TEXT,
+                active TINYINT(1) NOT NULL DEFAULT 1,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            "CREATE TABLE IF NOT EXISTS learning_paths (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                area_id INT NULL,
+                title VARCHAR(180) NOT NULL,
+                slug VARCHAR(180) NOT NULL UNIQUE,
+                description TEXT,
+                active TINYINT(1) NOT NULL DEFAULT 1,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT fk_paths_area FOREIGN KEY (area_id) REFERENCES knowledge_areas(id) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            "CREATE TABLE IF NOT EXISTS courses (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                area_id INT NULL,
+                title VARCHAR(180) NOT NULL,
+                slug VARCHAR(180) NOT NULL UNIQUE,
+                description TEXT,
+                level VARCHAR(40) NOT NULL DEFAULT 'introdutorio',
+                status VARCHAR(30) NOT NULL DEFAULT 'available',
+                active TINYINT(1) NOT NULL DEFAULT 1,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT fk_courses_area FOREIGN KEY (area_id) REFERENCES knowledge_areas(id) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            "CREATE TABLE IF NOT EXISTS learning_path_courses (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                path_id INT NOT NULL,
+                course_id INT NOT NULL,
+                position INT NOT NULL DEFAULT 0,
+                UNIQUE KEY unique_path_course (path_id, course_id),
+                CONSTRAINT fk_lpc_path FOREIGN KEY (path_id) REFERENCES learning_paths(id) ON DELETE CASCADE,
+                CONSTRAINT fk_lpc_course FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            "CREATE TABLE IF NOT EXISTS course_modules (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                course_id INT NOT NULL,
+                title VARCHAR(180) NOT NULL,
+                description TEXT,
+                position INT NOT NULL DEFAULT 0,
+                active TINYINT(1) NOT NULL DEFAULT 1,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT fk_modules_course FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            "CREATE TABLE IF NOT EXISTS enrollments (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                course_id INT NOT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'active',
+                enrolled_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY unique_user_course (user_id, course_id),
+                CONSTRAINT fk_enroll_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                CONSTRAINT fk_enroll_course FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+            "CREATE TABLE IF NOT EXISTS course_decks (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                course_id INT NOT NULL,
+                deck_id INT NOT NULL,
+                module_id INT NULL,
+                position INT NOT NULL DEFAULT 0,
+                UNIQUE KEY unique_course_deck (course_id, deck_id),
+                CONSTRAINT fk_cd_course FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+                CONSTRAINT fk_cd_deck FOREIGN KEY (deck_id) REFERENCES decks(id) ON DELETE CASCADE,
+                CONSTRAINT fk_cd_module FOREIGN KEY (module_id) REFERENCES course_modules(id) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+        ];
     }
 
     private function addColumnIfMissing(string $table, string $column, string $definition): void
@@ -370,8 +585,9 @@ SQL);
             $stmt->execute(['Administrador', password_hash('admin123', PASSWORD_DEFAULT), 'admin', 'admin@suinda.com']);
         }
 
-        $count = (int) $this->db->query('SELECT COUNT(*) FROM decks')->fetchColumn();
-        if ($count > 0) {
+        $deckCount = (int) $this->db->query('SELECT COUNT(*) FROM decks')->fetchColumn();
+        if ($deckCount > 0) {
+            $this->seedEducation();
             return;
         }
 
@@ -401,6 +617,436 @@ SQL);
         $cardStmt = $this->db->prepare('INSERT INTO cards (deck_id, question, answer) VALUES (?, ?, ?)');
         foreach ($cards as $card) {
             $cardStmt->execute($card);
+        }
+
+        $this->seedEducation();
+    }
+
+    /**
+     * Semeia a camada educacional de demonstracao (area, trilha, curso, modulo,
+     * vinculo curso<->baralho e matricula do aluno de teste). Idempotente:
+     * usa slug/colunas unicas, entao pode rodar varias vezes sem duplicar.
+     */
+    private function seedEducation(): void
+    {
+        $areaId = $this->ensureBySlug('knowledge_areas', 'fundamentos', function () {
+            $stmt = $this->db->prepare('INSERT INTO knowledge_areas (name, slug, description) VALUES (?, ?, ?)');
+            $stmt->execute(['Fundamentos', 'fundamentos', 'Conhecimentos de base para comecar a estudar com o Suinda.']);
+            return (int) $this->db->lastInsertId();
+        });
+
+        $courseId = $this->ensureBySlug('courses', 'biologia-basica', function () use ($areaId) {
+            $stmt = $this->db->prepare('INSERT INTO courses (area_id, title, slug, description, level, status) VALUES (?, ?, ?, ?, ?, ?)');
+            $stmt->execute([
+                $areaId,
+                'Biologia Basica',
+                'biologia-basica',
+                'Conceitos introdutorios de biologia para revisar com repeticao espacada.',
+                'introdutorio',
+                'available',
+            ]);
+            return (int) $this->db->lastInsertId();
+        });
+
+        // Curso "em breve" (sem matricula) apenas para ilustrar a vitrine.
+        $this->ensureBySlug('courses', 'historia-do-brasil', function () use ($areaId) {
+            $stmt = $this->db->prepare('INSERT INTO courses (area_id, title, slug, description, level, status) VALUES (?, ?, ?, ?, ?, ?)');
+            $stmt->execute([
+                $areaId,
+                'Historia do Brasil',
+                'historia-do-brasil',
+                'Marcos da historia do Brasil. Conteudo em preparacao.',
+                'introdutorio',
+                'coming_soon',
+            ]);
+            return (int) $this->db->lastInsertId();
+        });
+
+        $pathId = $this->ensureBySlug('learning_paths', 'trilha-de-fundamentos', function () use ($areaId) {
+            $stmt = $this->db->prepare('INSERT INTO learning_paths (area_id, title, slug, description) VALUES (?, ?, ?, ?)');
+            $stmt->execute([
+                $areaId,
+                'Trilha de Fundamentos',
+                'trilha-de-fundamentos',
+                'Um caminho sugerido para quem esta comecando os estudos.',
+            ]);
+            return (int) $this->db->lastInsertId();
+        });
+
+        $this->ensureLink(
+            'SELECT id FROM learning_path_courses WHERE path_id = ? AND course_id = ?',
+            [$pathId, $courseId],
+            'INSERT INTO learning_path_courses (path_id, course_id, position) VALUES (?, ?, ?)',
+            [$pathId, $courseId, 1]
+        );
+
+        $moduleId = $this->ensureModule($courseId, 'Modulo 1 — Primeiros conceitos');
+
+        // Vincula o curso ao baralho de Biologia ja semeado pelo app.
+        $deckId = $this->findDeckIdLike('%Biologia%');
+        if ($deckId !== null) {
+            $this->ensureLink(
+                'SELECT id FROM course_decks WHERE course_id = ? AND deck_id = ?',
+                [$courseId, $deckId],
+                'INSERT INTO course_decks (course_id, deck_id, module_id, position) VALUES (?, ?, ?, ?)',
+                [$courseId, $deckId, $moduleId, 1]
+            );
+        }
+
+        // Matricula o aluno de demonstracao no curso disponivel.
+        $studentId = $this->findUserIdByEmail('aluno@suinda.com');
+        if ($studentId !== null) {
+            $this->ensureLink(
+                'SELECT id FROM enrollments WHERE user_id = ? AND course_id = ?',
+                [$studentId, $courseId],
+                'INSERT INTO enrollments (user_id, course_id, status) VALUES (?, ?, ?)',
+                [$studentId, $courseId, 'active']
+            );
+        }
+    }
+
+    private function ensureBySlug(string $table, string $slug, callable $insert): int
+    {
+        $stmt = $this->db->prepare("SELECT id FROM {$table} WHERE slug = ? LIMIT 1");
+        $stmt->execute([$slug]);
+        $id = $stmt->fetchColumn();
+
+        return $id !== false ? (int) $id : (int) $insert();
+    }
+
+    private function ensureModule(int $courseId, string $title): int
+    {
+        $stmt = $this->db->prepare('SELECT id FROM course_modules WHERE course_id = ? AND title = ? LIMIT 1');
+        $stmt->execute([$courseId, $title]);
+        $id = $stmt->fetchColumn();
+        if ($id !== false) {
+            return (int) $id;
+        }
+
+        $stmt = $this->db->prepare('INSERT INTO course_modules (course_id, title, description, position) VALUES (?, ?, ?, ?)');
+        $stmt->execute([$courseId, $title, 'Conteudos iniciais do curso.', 1]);
+        return (int) $this->db->lastInsertId();
+    }
+
+    private function ensureLink(string $selectSql, array $selectParams, string $insertSql, array $insertParams): void
+    {
+        $stmt = $this->db->prepare($selectSql);
+        $stmt->execute($selectParams);
+        if ($stmt->fetchColumn() !== false) {
+            return;
+        }
+
+        $this->db->prepare($insertSql)->execute($insertParams);
+    }
+
+    private function findDeckIdLike(string $like): ?int
+    {
+        $stmt = $this->db->prepare('SELECT id FROM decks WHERE title LIKE ? AND active = 1 ORDER BY id LIMIT 1');
+        $stmt->execute([$like]);
+        $id = $stmt->fetchColumn();
+
+        return $id === false ? null : (int) $id;
+    }
+
+    private function findUserIdByEmail(string $email): ?int
+    {
+        $stmt = $this->db->prepare('SELECT id FROM users WHERE email = ? LIMIT 1');
+        $stmt->execute([$email]);
+        $id = $stmt->fetchColumn();
+
+        return $id === false ? null : (int) $id;
+    }
+
+    // ===================== Área administrativa (mini-CMS) =====================
+
+    /** Estado completo para popular a tela de administração. */
+    private function adminOverview(): void
+    {
+        $areas = $this->rowsInt(
+            $this->db->query('SELECT id, name, slug, description, active FROM knowledge_areas ORDER BY name')->fetchAll(),
+            ['id', 'active']
+        );
+        $courses = $this->rowsInt(
+            $this->db->query('SELECT id, area_id, title, slug, description, level, status, active FROM courses ORDER BY title')->fetchAll(),
+            ['id', 'area_id', 'active']
+        );
+        $paths = $this->rowsInt(
+            $this->db->query('SELECT id, area_id, title, slug, description, active FROM learning_paths ORDER BY title')->fetchAll(),
+            ['id', 'area_id', 'active']
+        );
+        $modules = $this->rowsInt(
+            $this->db->query('SELECT id, course_id, title, position FROM course_modules ORDER BY course_id, position')->fetchAll(),
+            ['id', 'course_id', 'position']
+        );
+        $decks = $this->rowsInt(
+            $this->db->query(
+                'SELECT decks.id, decks.title, decks.category, COUNT(cards.id) AS totalCards
+                 FROM decks LEFT JOIN cards ON cards.deck_id = decks.id AND cards.active = 1
+                 WHERE decks.active = 1 GROUP BY decks.id ORDER BY decks.title'
+            )->fetchAll(),
+            ['id', 'totalCards']
+        );
+        $users = $this->rowsInt(
+            $this->db->query('SELECT id, name, email, role, active FROM users ORDER BY name')->fetchAll(),
+            ['id', 'active']
+        );
+        $enrollments = $this->rowsInt(
+            $this->db->query(
+                'SELECT enrollments.id, enrollments.user_id, enrollments.course_id, enrollments.status,
+                        users.name AS user_name, users.email, courses.title AS course_title
+                 FROM enrollments
+                 INNER JOIN users ON users.id = enrollments.user_id
+                 INNER JOIN courses ON courses.id = enrollments.course_id
+                 ORDER BY enrollments.id DESC'
+            )->fetchAll(),
+            ['id', 'user_id', 'course_id']
+        );
+        $courseDecks = $this->rowsInt(
+            $this->db->query(
+                'SELECT course_decks.id, course_decks.course_id, course_decks.deck_id, course_decks.module_id,
+                        courses.title AS course_title, decks.title AS deck_title
+                 FROM course_decks
+                 INNER JOIN courses ON courses.id = course_decks.course_id
+                 INNER JOIN decks ON decks.id = course_decks.deck_id
+                 ORDER BY course_decks.course_id'
+            )->fetchAll(),
+            ['id', 'course_id', 'deck_id', 'module_id']
+        );
+        $pathCourses = $this->rowsInt(
+            $this->db->query(
+                'SELECT learning_path_courses.id, learning_path_courses.path_id, learning_path_courses.course_id,
+                        learning_path_courses.position, learning_paths.title AS path_title, courses.title AS course_title
+                 FROM learning_path_courses
+                 INNER JOIN learning_paths ON learning_paths.id = learning_path_courses.path_id
+                 INNER JOIN courses ON courses.id = learning_path_courses.course_id
+                 ORDER BY learning_path_courses.path_id, learning_path_courses.position'
+            )->fetchAll(),
+            ['id', 'path_id', 'course_id', 'position']
+        );
+
+        $this->json(compact(
+            'areas', 'courses', 'paths', 'modules', 'decks', 'users', 'enrollments', 'courseDecks', 'pathCourses'
+        ));
+    }
+
+    private function adminCreateUser(): void
+    {
+        $d = $this->input();
+        $name = trim((string) ($d['name'] ?? ''));
+        $email = strtolower(trim((string) ($d['email'] ?? '')));
+        $password = (string) ($d['password'] ?? '');
+        $role = ($d['role'] ?? 'student') === 'admin' ? 'admin' : 'student';
+
+        if ($name === '' || $email === '' || $password === '') {
+            $this->json(['error' => 'Informe nome, e-mail e senha.'], 422);
+            return;
+        }
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $this->json(['error' => 'E-mail invalido.'], 422);
+            return;
+        }
+        if (strlen($password) < 6) {
+            $this->json(['error' => 'A senha deve ter ao menos 6 caracteres.'], 422);
+            return;
+        }
+        if ($this->findUserIdByEmail($email) !== null) {
+            $this->json(['error' => 'Ja existe um usuario com este e-mail.'], 409);
+            return;
+        }
+
+        $stmt = $this->db->prepare('INSERT INTO users (name, email, password_hash, role, active) VALUES (?, ?, ?, ?, 1)');
+        $stmt->execute([$name, $email, password_hash($password, PASSWORD_DEFAULT), $role]);
+        $this->json(['id' => (int) $this->db->lastInsertId(), 'name' => $name, 'email' => $email, 'role' => $role], 201);
+    }
+
+    private function adminCreateArea(): void
+    {
+        $d = $this->input();
+        $name = trim((string) ($d['name'] ?? ''));
+        if ($name === '') {
+            $this->json(['error' => 'Informe o nome da area.'], 422);
+            return;
+        }
+        $slug = $this->uniqueSlug('knowledge_areas', $this->slugify($name));
+        $stmt = $this->db->prepare('INSERT INTO knowledge_areas (name, slug, description) VALUES (?, ?, ?)');
+        $stmt->execute([$name, $slug, trim((string) ($d['description'] ?? '')) ?: null]);
+        $this->json(['id' => (int) $this->db->lastInsertId(), 'slug' => $slug], 201);
+    }
+
+    private function adminCreateCourse(): void
+    {
+        $d = $this->input();
+        $title = trim((string) ($d['title'] ?? ''));
+        if ($title === '') {
+            $this->json(['error' => 'Informe o titulo do curso.'], 422);
+            return;
+        }
+        $areaId = $this->nullableFk('knowledge_areas', $d['areaId'] ?? null);
+        $status = in_array(($d['status'] ?? ''), ['available', 'coming_soon'], true) ? $d['status'] : 'available';
+        $level = trim((string) ($d['level'] ?? 'introdutorio')) ?: 'introdutorio';
+        $slug = $this->uniqueSlug('courses', $this->slugify($title));
+
+        $stmt = $this->db->prepare('INSERT INTO courses (area_id, title, slug, description, level, status) VALUES (?, ?, ?, ?, ?, ?)');
+        $stmt->execute([$areaId, $title, $slug, trim((string) ($d['description'] ?? '')) ?: null, $level, $status]);
+        $this->json(['id' => (int) $this->db->lastInsertId(), 'slug' => $slug], 201);
+    }
+
+    private function adminCreatePath(): void
+    {
+        $d = $this->input();
+        $title = trim((string) ($d['title'] ?? ''));
+        if ($title === '') {
+            $this->json(['error' => 'Informe o titulo da trilha.'], 422);
+            return;
+        }
+        $areaId = $this->nullableFk('knowledge_areas', $d['areaId'] ?? null);
+        $slug = $this->uniqueSlug('learning_paths', $this->slugify($title));
+        $stmt = $this->db->prepare('INSERT INTO learning_paths (area_id, title, slug, description) VALUES (?, ?, ?, ?)');
+        $stmt->execute([$areaId, $title, $slug, trim((string) ($d['description'] ?? '')) ?: null]);
+        $this->json(['id' => (int) $this->db->lastInsertId(), 'slug' => $slug], 201);
+    }
+
+    private function adminCreateModule(): void
+    {
+        $d = $this->input();
+        $courseId = (int) ($d['courseId'] ?? 0);
+        $title = trim((string) ($d['title'] ?? ''));
+        if ($courseId <= 0 || $title === '') {
+            $this->json(['error' => 'Informe o curso e o titulo do modulo.'], 422);
+            return;
+        }
+        if (!$this->rowExists('courses', $courseId)) {
+            $this->json(['error' => 'Curso inexistente.'], 422);
+            return;
+        }
+        $position = (int) ($d['position'] ?? 0);
+        $stmt = $this->db->prepare('INSERT INTO course_modules (course_id, title, description, position) VALUES (?, ?, ?, ?)');
+        $stmt->execute([$courseId, $title, trim((string) ($d['description'] ?? '')) ?: null, $position]);
+        $this->json(['id' => (int) $this->db->lastInsertId()], 201);
+    }
+
+    private function adminLinkPathCourse(): void
+    {
+        $d = $this->input();
+        $pathId = (int) ($d['pathId'] ?? 0);
+        $courseId = (int) ($d['courseId'] ?? 0);
+        if (!$this->rowExists('learning_paths', $pathId) || !$this->rowExists('courses', $courseId)) {
+            $this->json(['error' => 'Trilha ou curso inexistente.'], 422);
+            return;
+        }
+        $this->ensureLink(
+            'SELECT id FROM learning_path_courses WHERE path_id = ? AND course_id = ?',
+            [$pathId, $courseId],
+            'INSERT INTO learning_path_courses (path_id, course_id, position) VALUES (?, ?, ?)',
+            [$pathId, $courseId, (int) ($d['position'] ?? 0)]
+        );
+        $this->json(['ok' => true], 201);
+    }
+
+    private function adminLinkCourseDeck(): void
+    {
+        $d = $this->input();
+        $courseId = (int) ($d['courseId'] ?? 0);
+        $deckId = (int) ($d['deckId'] ?? 0);
+        if (!$this->rowExists('courses', $courseId) || !$this->rowExists('decks', $deckId)) {
+            $this->json(['error' => 'Curso ou baralho inexistente.'], 422);
+            return;
+        }
+        $moduleId = $this->nullableFk('course_modules', $d['moduleId'] ?? null);
+        $this->ensureLink(
+            'SELECT id FROM course_decks WHERE course_id = ? AND deck_id = ?',
+            [$courseId, $deckId],
+            'INSERT INTO course_decks (course_id, deck_id, module_id, position) VALUES (?, ?, ?, ?)',
+            [$courseId, $deckId, $moduleId, (int) ($d['position'] ?? 0)]
+        );
+        $this->json(['ok' => true], 201);
+    }
+
+    private function adminEnroll(): void
+    {
+        $d = $this->input();
+        $userId = (int) ($d['userId'] ?? 0);
+        $courseId = (int) ($d['courseId'] ?? 0);
+        if (!$this->rowExists('users', $userId) || !$this->rowExists('courses', $courseId)) {
+            $this->json(['error' => 'Estudante ou curso inexistente.'], 422);
+            return;
+        }
+        $this->ensureLink(
+            'SELECT id FROM enrollments WHERE user_id = ? AND course_id = ?',
+            [$userId, $courseId],
+            'INSERT INTO enrollments (user_id, course_id, status) VALUES (?, ?, ?)',
+            [$userId, $courseId, 'active']
+        );
+        $this->json(['ok' => true], 201);
+    }
+
+    /** DELETE genérico para vínculos administrativos (lista branca de tabelas). */
+    private function adminDelete(string $table, int $id): void
+    {
+        if (!in_array($table, ['enrollments', 'course_decks'], true)) {
+            $this->json(['error' => 'Operacao nao permitida.'], 403);
+            return;
+        }
+        $stmt = $this->db->prepare("DELETE FROM {$table} WHERE id = ?");
+        $stmt->execute([$id]);
+        $this->json(['ok' => true, 'deleted' => $stmt->rowCount()]);
+    }
+
+    private function rowsInt(array $rows, array $intKeys): array
+    {
+        return array_map(function (array $row) use ($intKeys): array {
+            foreach ($intKeys as $key) {
+                if (array_key_exists($key, $row) && $row[$key] !== null) {
+                    $row[$key] = (int) $row[$key];
+                }
+            }
+            return $row;
+        }, $rows);
+    }
+
+    private function rowExists(string $table, int $id): bool
+    {
+        if ($id <= 0) {
+            return false;
+        }
+        $stmt = $this->db->prepare("SELECT 1 FROM {$table} WHERE id = ? LIMIT 1");
+        $stmt->execute([$id]);
+        return $stmt->fetchColumn() !== false;
+    }
+
+    private function nullableFk(string $table, mixed $value): ?int
+    {
+        $id = (int) ($value ?? 0);
+        return ($id > 0 && $this->rowExists($table, $id)) ? $id : null;
+    }
+
+    private function slugify(string $text): string
+    {
+        $text = trim($text);
+        if (function_exists('iconv')) {
+            $converted = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $text);
+            if ($converted !== false) {
+                $text = $converted;
+            }
+        }
+        $text = strtolower($text);
+        $text = preg_replace('/[^a-z0-9]+/', '-', $text) ?? $text;
+        $text = trim($text, '-');
+        return $text !== '' ? $text : 'item';
+    }
+
+    private function uniqueSlug(string $table, string $base): string
+    {
+        $slug = $base;
+        $n = 2;
+        $stmt = $this->db->prepare("SELECT 1 FROM {$table} WHERE slug = ? LIMIT 1");
+        while (true) {
+            $stmt->execute([$slug]);
+            if ($stmt->fetchColumn() === false) {
+                return $slug;
+            }
+            $slug = $base . '-' . $n;
+            $n++;
         }
     }
 
@@ -453,20 +1099,39 @@ SQL);
 
     private function listDecks(): void
     {
-        $rows = $this->db->query(
+        $allowed = $this->allowedDeckIds();
+
+        // Estudante sem nenhum baralho liberado: lista vazia (sem erro).
+        if ($allowed !== null && $allowed === []) {
+            $this->json(['decks' => []]);
+            return;
+        }
+
+        $where = 'decks.active = 1';
+        $params = [];
+        if ($allowed !== null) {
+            $placeholders = implode(',', array_fill(0, count($allowed), '?'));
+            $where .= " AND decks.id IN ($placeholders)";
+            $params = $allowed;
+        }
+
+        $stmt = $this->db->prepare(
             'SELECT decks.id, decks.title, decks.description, decks.category, COUNT(cards.id) AS totalCards
              FROM decks
              LEFT JOIN cards ON cards.deck_id = decks.id AND cards.active = 1
-             WHERE decks.active = 1
+             WHERE ' . $where . '
              GROUP BY decks.id
              ORDER BY decks.id'
-        )->fetchAll();
+        );
+        $stmt->execute($params);
 
-        $this->json(['decks' => array_map([$this, 'normalizeDeck'], $rows)]);
+        $this->json(['decks' => array_map([$this, 'normalizeDeck'], $stmt->fetchAll())]);
     }
 
     private function showDeck(int $id): void
     {
+        $this->requireDeckAccess($id);
+
         $stmt = $this->db->prepare(
             'SELECT decks.id, decks.title, decks.description, decks.category, COUNT(cards.id) AS totalCards
              FROM decks
@@ -501,8 +1166,9 @@ SQL);
             $description = 'Baralho criado pelo usuario.';
         }
 
-        $stmt = $this->db->prepare('INSERT INTO decks (title, description, category) VALUES (?, ?, ?)');
-        $stmt->execute([$title, $description, $category]);
+        $ownerId = (int) ($this->currentUser['id'] ?? 0) ?: null;
+        $stmt = $this->db->prepare('INSERT INTO decks (title, description, category, owner_id) VALUES (?, ?, ?, ?)');
+        $stmt->execute([$title, $description, $category, $ownerId]);
 
         $this->showDeck((int) $this->db->lastInsertId());
     }
@@ -572,6 +1238,8 @@ SQL);
 
     private function listCards(int $deckId): void
     {
+        $this->requireDeckAccess($deckId);
+
         $includeMedia = ($_GET['includeMedia'] ?? '1') !== '0';
         // Em modo "lista" (includeMedia=0) descartamos as colunas pesadas que
         // nao sao necessarias para popular a tabela do Card Browser nem para
@@ -626,6 +1294,8 @@ SQL);
             $this->json(['error' => 'Cartao nao encontrado.'], 404);
             return;
         }
+
+        $this->requireDeckAccess((int) $card['deckId']);
 
         $this->json(['card' => $card]);
     }
@@ -1997,6 +2667,13 @@ SQL);
 
     private function saveCardProgress(int $userId, int $cardId): void
     {
+        $deckId = $this->cardDeckId($cardId);
+        if ($deckId === null) {
+            $this->json(['error' => 'Cartao nao encontrado.'], 404);
+            return;
+        }
+        $this->requireDeckAccess($deckId);
+
         $data = $this->input();
 
         $this->upsertCardProgress($userId, $cardId, $data);
@@ -2048,6 +2725,286 @@ SQL);
             $data['lastRating'] ?? null,
             date('c'),
         ]);
+    }
+
+    private function stripBasePath(string $path): string
+    {
+        $base = (string) ($this->config['base_path'] ?? '');
+
+        if ($base === '') {
+            // Auto-detecta o prefixo a partir do diretorio do script de entrada
+            // (ex.: /suinda/api quando servido por Apache). Em servidor PHP
+            // embutido com router, SCRIPT_NAME costuma ser "/" e nada e removido.
+            $script = str_replace('\\', '/', (string) ($_SERVER['SCRIPT_NAME'] ?? ''));
+            $base = rtrim(dirname($script), '/');
+        }
+
+        $base = '/' . trim($base, '/');
+        if ($base !== '/' && str_starts_with($path, $base)) {
+            $stripped = substr($path, strlen($base));
+            return $stripped === '' ? '/' : $stripped;
+        }
+
+        return $path;
+    }
+
+    private function isAdmin(): bool
+    {
+        return ($this->currentUser['role'] ?? '') === 'admin';
+    }
+
+    /**
+     * IDs de baralhos que o usuario atual pode ver/estudar.
+     * Retorna null quando nao ha restricao (admin enxerga tudo).
+     */
+    private function allowedDeckIds(): ?array
+    {
+        if ($this->isAdmin()) {
+            return null;
+        }
+
+        $userId = (int) ($this->currentUser['id'] ?? 0);
+
+        $stmt = $this->db->prepare(
+            'SELECT DISTINCT course_decks.deck_id AS id
+             FROM course_decks
+             INNER JOIN enrollments ON enrollments.course_id = course_decks.course_id
+             INNER JOIN decks ON decks.id = course_decks.deck_id
+             WHERE enrollments.user_id = ? AND enrollments.status = ? AND decks.active = 1'
+        );
+        $stmt->execute([$userId, 'active']);
+        $ids = array_map('intval', array_column($stmt->fetchAll(), 'id'));
+
+        // Baralhos pessoais do proprio estudante continuam acessiveis.
+        $owned = $this->db->prepare('SELECT id FROM decks WHERE owner_id = ? AND active = 1');
+        $owned->execute([$userId]);
+        $ids = array_merge($ids, array_map('intval', array_column($owned->fetchAll(), 'id')));
+
+        return array_values(array_unique($ids));
+    }
+
+    private function deckAllowed(int $deckId): bool
+    {
+        $allowed = $this->allowedDeckIds();
+        return $allowed === null || in_array($deckId, $allowed, true);
+    }
+
+    private function requireDeckAccess(int $deckId): void
+    {
+        if (!$this->deckAllowed($deckId)) {
+            $this->json(['error' => 'Este conteudo ainda nao foi liberado para a sua conta.'], 403);
+            exit;
+        }
+    }
+
+    private function cardDeckId(int $cardId): ?int
+    {
+        $stmt = $this->db->prepare('SELECT deck_id FROM cards WHERE id = ? AND active = 1 LIMIT 1');
+        $stmt->execute([$cardId]);
+        $deckId = $stmt->fetchColumn();
+
+        return $deckId === false ? null : (int) $deckId;
+    }
+
+    private function dashboard(): void
+    {
+        $courses = $this->enrolledCourses();
+        $paths = $this->releasedPaths();
+
+        $totals = ['courses' => count($courses), 'decks' => 0, 'newCards' => 0, 'dueCards' => 0];
+        foreach ($courses as $course) {
+            $totals['decks'] += count($course['decks']);
+            $totals['newCards'] += $course['progress']['newCards'];
+            $totals['dueCards'] += $course['progress']['dueCards'];
+        }
+
+        $this->json([
+            'user' => $this->currentUser,
+            'courses' => $courses,
+            'paths' => $paths,
+            'totals' => $totals,
+            'hasContent' => count($courses) > 0,
+        ]);
+    }
+
+    /** Cursos em que o estudante esta matriculado, com baralhos e progresso. */
+    private function enrolledCourses(): array
+    {
+        $userId = (int) ($this->currentUser['id'] ?? 0);
+
+        if ($this->isAdmin()) {
+            $courseRows = $this->db->query(
+                'SELECT id, title, slug, description, level, status FROM courses WHERE active = 1 ORDER BY id'
+            )->fetchAll();
+        } else {
+            $courseRows = $this->prepared(
+                'SELECT courses.id, courses.title, courses.slug, courses.description, courses.level, courses.status
+                 FROM courses
+                 INNER JOIN enrollments ON enrollments.course_id = courses.id
+                 WHERE enrollments.user_id = ? AND enrollments.status = ? AND courses.active = 1
+                 ORDER BY courses.id',
+                [$userId, 'active']
+            )->fetchAll();
+        }
+
+        $deckStmt = $this->db->prepare(
+            'SELECT decks.id, decks.title, decks.description, decks.category, course_decks.module_id
+             FROM course_decks
+             INNER JOIN decks ON decks.id = course_decks.deck_id
+             WHERE course_decks.course_id = ? AND decks.active = 1
+             ORDER BY course_decks.position, decks.id'
+        );
+        $moduleCountStmt = $this->db->prepare('SELECT COUNT(*) FROM course_modules WHERE course_id = ? AND active = 1');
+
+        $courses = [];
+        foreach ($courseRows as $course) {
+            $courseId = (int) $course['id'];
+            $deckStmt->execute([$courseId]);
+
+            $decks = [];
+            $agg = ['total' => 0, 'studied' => 0, 'newCards' => 0, 'dueCards' => 0];
+
+            foreach ($deckStmt->fetchAll() as $deckRow) {
+                $deckId = (int) $deckRow['id'];
+                $counts = $this->deckStudyCounts($userId, $deckId);
+                $decks[] = [
+                    'id' => $deckId,
+                    'title' => $deckRow['title'],
+                    'description' => $deckRow['description'],
+                    'category' => $deckRow['category'],
+                    'totalCards' => $counts['total'],
+                    'newCards' => $counts['newCards'],
+                    'dueCards' => $counts['dueCards'],
+                    'studiedCards' => $counts['studied'],
+                ];
+                $agg['total'] += $counts['total'];
+                $agg['studied'] += $counts['studied'];
+                $agg['newCards'] += $counts['newCards'];
+                $agg['dueCards'] += $counts['dueCards'];
+            }
+
+            $moduleCountStmt->execute([$courseId]);
+            $percent = $agg['total'] > 0 ? (int) round(($agg['studied'] / $agg['total']) * 100) : 0;
+
+            $courses[] = [
+                'id' => $courseId,
+                'title' => $course['title'],
+                'slug' => $course['slug'],
+                'description' => $course['description'],
+                'level' => $course['level'],
+                'status' => $course['status'],
+                'modules' => (int) $moduleCountStmt->fetchColumn(),
+                'decks' => $decks,
+                'progress' => [
+                    'totalCards' => $agg['total'],
+                    'studiedCards' => $agg['studied'],
+                    'newCards' => $agg['newCards'],
+                    'dueCards' => $agg['dueCards'],
+                    'percent' => $percent,
+                ],
+            ];
+        }
+
+        return $courses;
+    }
+
+    /** Trilhas com ao menos um curso liberado para o estudante (admin ve todas). */
+    private function releasedPaths(): array
+    {
+        $userId = (int) ($this->currentUser['id'] ?? 0);
+        $isAdmin = $this->isAdmin();
+
+        $paths = $this->db->query(
+            'SELECT id, title, slug, description FROM learning_paths WHERE active = 1 ORDER BY id'
+        )->fetchAll();
+
+        $courseStmt = $this->db->prepare(
+            'SELECT courses.id, courses.title, courses.slug, courses.status
+             FROM learning_path_courses
+             INNER JOIN courses ON courses.id = learning_path_courses.course_id
+             WHERE learning_path_courses.path_id = ? AND courses.active = 1
+             ORDER BY learning_path_courses.position, courses.id'
+        );
+        $enrolledStmt = $this->db->prepare(
+            'SELECT COUNT(*) FROM enrollments WHERE user_id = ? AND course_id = ? AND status = ?'
+        );
+
+        $result = [];
+        foreach ($paths as $path) {
+            $courseStmt->execute([(int) $path['id']]);
+            $courses = [];
+            $hasEnrollment = false;
+
+            foreach ($courseStmt->fetchAll() as $course) {
+                $enrolled = $isAdmin;
+                if (!$isAdmin) {
+                    $enrolledStmt->execute([$userId, (int) $course['id'], 'active']);
+                    $enrolled = ((int) $enrolledStmt->fetchColumn()) > 0;
+                }
+                $hasEnrollment = $hasEnrollment || $enrolled;
+                $courses[] = [
+                    'id' => (int) $course['id'],
+                    'title' => $course['title'],
+                    'slug' => $course['slug'],
+                    'status' => $course['status'],
+                    'enrolled' => $enrolled,
+                ];
+            }
+
+            if (!$isAdmin && !$hasEnrollment) {
+                continue;
+            }
+
+            $result[] = [
+                'id' => (int) $path['id'],
+                'title' => $path['title'],
+                'slug' => $path['slug'],
+                'description' => $path['description'],
+                'courses' => $courses,
+            ];
+        }
+
+        return $result;
+    }
+
+    /** Contagem de cartoes (total, estudados, novos, a revisar) do usuario em um baralho. */
+    private function deckStudyCounts(int $userId, int $deckId): array
+    {
+        $total = (int) $this->prepared(
+            'SELECT COUNT(*) FROM cards WHERE deck_id = ? AND active = 1',
+            [$deckId]
+        )->fetchColumn();
+
+        $studied = (int) $this->prepared(
+            'SELECT COUNT(*) FROM card_progress
+             INNER JOIN cards ON cards.id = card_progress.card_id
+             WHERE cards.deck_id = ? AND cards.active = 1 AND card_progress.user_id = ? AND card_progress.state <> ?',
+            [$deckId, $userId, 'new']
+        )->fetchColumn();
+
+        $now = (new DateTimeImmutable('now'))->format('c');
+        $due = (int) $this->prepared(
+            'SELECT COUNT(*) FROM card_progress
+             INNER JOIN cards ON cards.id = card_progress.card_id
+             WHERE cards.deck_id = ? AND cards.active = 1 AND card_progress.user_id = ?
+               AND card_progress.state <> ? AND card_progress.due_at IS NOT NULL AND card_progress.due_at <= ?',
+            [$deckId, $userId, 'new', $now]
+        )->fetchColumn();
+
+        return [
+            'total' => $total,
+            'studied' => $studied,
+            'newCards' => max(0, $total - $studied),
+            'dueCards' => $due,
+        ];
+    }
+
+    private function prepared(string $sql, array $params): PDOStatement
+    {
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute($params);
+
+        return $stmt;
     }
 
     private function input(): array
